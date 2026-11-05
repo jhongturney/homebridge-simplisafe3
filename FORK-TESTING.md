@@ -12,7 +12,7 @@ branch itself is not an installable build.
    with certificate verification, a seven-second total deadline, a 4 MiB response
    limit, and immediate connection cleanup after the first JPEG. Preserve shutter
    privacy checks and the existing LiveKit streaming path.
-2. **Next — compatible dependency and security refresh.** Update
+2. **1.11.5-jhongturney.2 — compatible dependency and security refresh.** Update
    `follow-redirects`, Axios, WebSocket and LiveKit protocol dependencies, and
    compatible transitive security fixes. Recheck authentication and cameras.
 3. **Then — runtime policy and dependency migrations.** Align Node requirements
@@ -37,7 +37,24 @@ events are excluded from the upstream npm publishing job.
   dependency checkpoints; the fork is not claimed to be vulnerability-free.
 - The release asset includes `npm-shrinkwrap.json` to pin the tested dependency
   graph. Package installation and plugin registration are checked independently.
-- Real SimpliSafe hardware and certificate behavior still require field testing.
+- User field test passed: Home app snapshots, live video and audio work on both
+  a battery-powered outdoor camera and a plugged-in indoor camera after enabling
+  camera support. Exact camera models/provider paths were not supplied; do not
+  infer either from their power source. Shutter privacy, notifications, alarm
+  controls and sensor updates have not been separately confirmed.
+
+## Second checkpoint validation
+
+- Updated only Axios 1.20.0 → 1.21.0, ws 8.21.0 → 8.22.1,
+  @livekit/protocol 1.52.1 → 1.53.4, follow-redirects 1.16.1 → 1.16.2,
+  and @babel/runtime 7.17.9 → 7.29.13. No packages were added or removed.
+- No application source changes; camera implementation, FFmpeg and Werift stay
+  at the first checkpoint's tested versions.
+- All 79 tests passed on Node 22, 24 and 26; lint and type checks passed.
+- Production audit reduced from 5 findings to 3 moderate findings, all in the
+  Oclif/minimatch CLI dependency chain. No high or critical production findings.
+- Repeat both-camera snapshots, live video/audio, ordinary alarm/sensor operation
+  and event notification checks before moving to dependency migrations.
 
 ## Field checks
 
