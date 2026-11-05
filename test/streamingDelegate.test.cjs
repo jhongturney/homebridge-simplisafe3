@@ -53,6 +53,44 @@ function createCameraStub(overrides = {}) {
     };
 }
 
+test('legacy snapshot requests use the verified hostname and return the downloaded JPEG', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const jpeg = Buffer.from([0xff, 0xd8, 1, 0xff, 0xd9]);
+    const download = t.mock.method(snapshot, 'default', async (url, options) => {
+        assert.equal(url, 'https://media.simplisafe.com/v1/camera-uuid/mjpg?x=640&fr=1');
+        assert.equal(options.headers.Authorization, 'Bearer token-123');
+        return jpeg;
+    });
+    const delegate = new StreamingDelegate(createCameraStub());
+    const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+    assert.deepEqual(result, [undefined, jpeg]);
+    assert.equal(download.mock.callCount(), 1);
+});
+
+test('legacy snapshots preserve shutter privacy in every alarm mode', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const download = t.mock.method(snapshot, 'default', async () => { throw new Error('must not contact the camera'); });
+    for (const alarmState of ['OFF', 'HOME', 'AWAY']) {
+        const delegate = new StreamingDelegate(createCameraStub({
+            supportsPrivacyShutter: () => true,
+            simplisafe: { isBlocked: false, getAlarmSystem: async () => ({ alarmState }) },
+        }));
+        const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+        assert.equal(result[0], undefined);
+        assert.ok(Buffer.isBuffer(result[1]));
+    }
+    assert.equal(download.mock.callCount(), 0);
+});
+
+test('legacy snapshot download failures reach the HomeKit callback', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const error = new Error('Camera snapshot timed out');
+    t.mock.method(snapshot, 'default', async () => { throw error; });
+    const delegate = new StreamingDelegate(createCameraStub());
+    const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+    assert.deepEqual(result, [error]);
+});
+
 test('constructor limits advertised resolutions to the configured picture quality', () => {
     const delegate = new StreamingDelegate(createCameraStub());
     const heights = delegate.controller.streamingOptions.video.resolutions.map((resolution) => resolution[1]);

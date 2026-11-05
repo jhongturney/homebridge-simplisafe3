@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import jpegExtract from 'jpeg-extract';
+import jpegSnapshot from './jpegSnapshot';
 import crypto from 'crypto';
 import dns from 'dns';
 import { promisify } from 'util';
@@ -156,24 +156,12 @@ class StreamingDelegate {
             }
         }
 
-        try {
-            let newIpAddress = await dnsLookup('media.simplisafe.com');
-            this.serverIpAddress = newIpAddress.address;
-        } catch (err) {
-            if (!this.serverIpAddress) {
-                this.log.error('Could not resolve hostname for media.simplisafe.com');
-            }
-        }
-
-        const url = {
-            url: `https://${this.serverIpAddress}/v1/${this.ss3Camera.cameraDetails.uuid}/mjpg?x=${request.width}&fr=1`,
+        const url = `https://media.simplisafe.com/v1/${this.ss3Camera.cameraDetails.uuid}/mjpg?x=${request.width}&fr=1`;
+        jpegSnapshot(url, {
             headers: {
                 'Authorization': `Bearer ${this.ss3Camera.authManager.accessToken}`
-            },
-            rejectUnauthorized: false // OK because we are using IP and just polled DNS
-        };
-
-        jpegExtract(url).then(img => {
+            }
+        }).then(img => {
             if (this.ss3Camera.debug) this.log(`Closed '${this.cameraDetails.cameraSettings.cameraName}' snapshot request with ${Math.round(img.length/1000)}kB image`);
             callback(undefined, img);
         }).catch(err => {
