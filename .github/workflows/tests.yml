@@ -10,8 +10,8 @@ jobs:
     name: Lint and Typecheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -20,18 +20,25 @@ jobs:
       - run: npm run typecheck
 
   test:
-    name: Build and Test (Node ${{ matrix.node-version }})
+    name: Test (Node ${{ matrix.node-version }}, Homebridge ${{ matrix.homebridge-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20, 22, 24]
+        node-version: ['22.12.0', 24, 26]
+        homebridge-version: ['1.11.4', '2.5.0']
+        exclude:
+          # Homebridge 1 does not declare support for Node 26.
+          - node-version: 26
+            homebridge-version: '1.11.4'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
+      - run: npm install --no-save --package-lock=false --ignore-scripts homebridge@${{ matrix.homebridge-version }}
+      - run: npm run typecheck
       - run: npm run build
       - run: npm run test:unit

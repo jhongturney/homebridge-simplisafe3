@@ -33,6 +33,11 @@ Here are some example screenshots:
 
 ## Usage
 
+This testing fork supports Node 22.12+ within the 22.x series, Node 24.x and
+Node 26.x. Use Homebridge 1.11.4+ within the 1.x series or Homebridge 2.5+ within
+the 2.x series. Homebridge 1 is tested on Node 22 and 24; Homebridge 2 is tested
+on Node 22, 24 and 26. Install the fork's compiled GitHub release package.
+
 This plugin supports installation and changing settings (for `config.js`) via the popular [Config UI X plugin](https://github.com/oznu/homebridge-config-ui-x) which is recommended for easiest usage.
 
 Either install and configure using Config UI X or you can manually install the plugin by running:

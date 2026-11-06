@@ -1,61 +1,48 @@
-import { Command, Flags } from '@oclif/core';
 import { SimpliSafe3AuthenticationManager } from '../lib/authManager';
-import path from 'path';
-import os from 'os';
-import { inspect } from 'util';
 import { createInterface } from 'readline/promises';
-import isDocker from 'is-docker';
 
-const homebridgeDir = Flags.string({
-    char: 'd',
-    description: 'The path to your Homebridge directory',
-    default: async () => {
-        return isDocker() ? '/homebridge/' : path.join(os.homedir(), '.homebridge');
-    }
-});
-
-class Login extends Command {
+class Login {
     static description = 'Login with SimpliSafe';
-    static flags = {
-        homebridgeDir
-    };
     authManager?: SimpliSafe3AuthenticationManager;
 
-    async run(): Promise<void> {
-        const {flags} = await this.parse(Login);
+    static async run(storagePath: string): Promise<void> {
+        await new Login().run(storagePath);
+    }
 
-        this.authManager = new SimpliSafe3AuthenticationManager(flags.homebridgeDir);
+    async run(storagePath: string): Promise<void> {
+        this.authManager = new SimpliSafe3AuthenticationManager(storagePath);
 
         const loginURL = this.authManager.getSSAuthURL();
 
-        this.log('\n******* Simplisafe Authentication *******');
-        this.log('\nCopy and paste this URL into your browser to log in to SimpliSafe:\n' + loginURL);
-        this.log('\nOnce you have approved the login, depending on your browser, you then will either be redirected to a URL that begins with com.SimpliSafe.mobile:// which you should copy and paste back here in its entirety.');
-        this.log('\nOr, many browsers will not display the final redirect but will show an error in the Console (e.g. View > Developer Tools > Javascript Console) and you will have to copy and paste the URL from the error message.');
-        this.log('\nSafari v15.1+ does not show the URL in the console or the browser and thus is not recommended for this process.');
-        this.log('\nAlso please note that this task cannot be performed on a mobile device.\n');
+        console.log('\n******* Simplisafe Authentication *******');
+        console.log('\nCopy and paste this URL into your browser to log in to SimpliSafe:\n' + loginURL);
+        console.log('\nOnce you have approved the login, depending on your browser, you then will either be redirected to a URL that begins with com.SimpliSafe.mobile:// which you should copy and paste back here in its entirety.');
+        console.log('\nOr, many browsers will not display the final redirect but will show an error in the Console (e.g. View > Developer Tools > Javascript Console) and you will have to copy and paste the URL from the error message.');
+        console.log('\nSafari v15.1+ does not show the URL in the console or the browser and thus is not recommended for this process.');
+        console.log('\nAlso please note that this task cannot be performed on a mobile device.\n');
 
         const rl = createInterface({ input: process.stdin, output: process.stdout });
         rl.on('SIGINT', () => process.exit(130)); // readline swallows Ctrl+C otherwise
-        const redirectURLStr = (await rl.question('Redirect URL: ')).trim();
-        rl.close();
+        let redirectURLStr;
+        try {
+            redirectURLStr = (await rl.question('Redirect URL: ')).trim();
+        } finally {
+            rl.close();
+        }
 
         const code = this.authManager.parseCodeFromURL(redirectURLStr);
 
         try {
             await this.authManager.getToken(code);
 
-            this.log('\nCredentials retrieved successfully.');
-            this.log('accessToken: ' + this.authManager.accessToken);
-            this.log('refreshToken: ' + this.authManager.refreshToken);
-            this.log('Please restart Homebridge for changes to take effect.');
+            console.log('\nCredentials retrieved successfully.');
+            console.log('Please restart Homebridge for changes to take effect.');
         } catch (e) {
-            this.log('\nAn error occurred retrieving credentials:');
-            this.log(inspect(e));
-            this.exit(1);
+            throw new Error(`An error occurred retrieving credentials: ${(e as Error).message}`);
+        } finally {
+            // A one-off login must not keep running the background token refresh.
+            clearInterval(this.authManager.refreshInterval);
         }
-
-        this.exit(0);
     }
 }
 
