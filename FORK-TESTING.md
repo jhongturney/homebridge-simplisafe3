@@ -25,8 +25,9 @@ branch itself is not an installable build.
 5. **1.11.5-jhongturney.5 — HTTP retry helper.** Update axios-retry from 3.9.1 to
    4.5.0. Preserve retry limits and the v3 policy of not automatically retrying
    HTTP 429; verify real Axios/retry behavior with an isolated response adapter.
-6. **Then — camera dependency migration.** Test the newer WebRTC implementation
-   separately against both working cameras.
+6. **1.11.5-jhongturney.6 — camera dependency migration.** Upgrade Werift from
+   0.24.4 to 0.26.0. Test encrypted HomeKit forwarding and a real local WebRTC
+   connection before field testing both working cameras.
 7. **Then — request and polling performance.** Share in-flight requests and
    credential refreshes; prevent overlapping polls; add network deadlines.
 8. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
@@ -123,7 +124,27 @@ events are excluded from the upstream npm publishing job.
 - All 105 tests pass on Node 22.12.0, 24 and 26; lint and type checks pass.
   Production lockfile audit remains at zero findings.
 - Camera implementation, UI helper and UI request logging remain unchanged.
-- Field testing of the fifth checkpoint is pending.
+- User field test passed: "Yep, everything still works".
+
+## Sixth checkpoint validation
+
+- Update Werift 0.24.4 → 0.26.0 and its required Mediabunny dependency
+  1.60.0 → 1.65.2 in the source lockfile; remove 27 no-longer-needed locked
+  package entries. All other retained versions stay unchanged.
+- No application code changes. Test real SRTP encryption/decryption of the
+  plugin's video forwarding, multi-frame Opus repacketization and sequence-number
+  rollover with HomeKit-format keys.
+- A local WebRTC integration test uses the actual LiveKit camera adapter and
+  real ICE, DTLS and SRTP to receive H.264 and Opus RTP payloads. Both peers,
+  candidate addresses and a test STUN responder are restricted to loopback.
+- All 109 tests, including the local WebRTC connection, pass on Node 22.12.0,
+  24 and 26. Lint/type checks pass; production lockfile audit remains clean.
+- CI runs the local WebRTC integration test on all five supported Homebridge /
+  Node combinations in addition to the existing suite.
+- Field testing of checkpoint 6 is pending: check fresh snapshots and live video
+  and audio on both cameras, including closing and reopening the live view.
+- Local tests verify transport, codec negotiation and RTP bytes, not decoded
+  picture/audio quality or real SimpliSafe/LiveKit cloud interoperability.
 
 ## Field checks
 
