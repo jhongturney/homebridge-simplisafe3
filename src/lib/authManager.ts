@@ -8,6 +8,7 @@ import axiosRetry from 'axios-retry';
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
+import withRequestTimeout from './httpRequest';
 
 export const AUTH_EVENTS = {
     REFRESH_CREDENTIALS_SUCCESS: 'REFRESH_CREDENTIALS_SUCCESS',
@@ -59,6 +60,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
     codeChallenge: string;
     expiry?: number;
     refreshInterval?: ReturnType<typeof setInterval>;
+    private refreshInFlight?: Promise<void>;
     log: Logger;
     debug: boolean;
 
@@ -154,13 +156,13 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
 
     async getToken(authorizationCode: string): Promise<string | null | undefined> {
         try {
-            const tokenResponse = await ssOAuth.post<TokenResponse>('/token', {
+            const tokenResponse = await withRequestTimeout(options => ssOAuth.post<TokenResponse>('/token', {
                 grant_type: 'authorization_code',
                 client_id: SS_OAUTH_CLIENT_ID,
                 code_verifier: this.codeVerifier,
                 code: authorizationCode,
                 redirect_uri: SS_OAUTH_REDIRECT_URI,
-            });
+            }, options));
 
             await this._storeToken(tokenResponse.data);
             return this.accessToken;
@@ -170,7 +172,16 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
         }
     }
 
-    async refreshCredentials(): Promise<void> {
+    refreshCredentials(): Promise<void> {
+        if (this.refreshInFlight) return this.refreshInFlight;
+        const refresh = this._refreshCredentials().finally(() => {
+            if (this.refreshInFlight === refresh) this.refreshInFlight = undefined;
+        });
+        this.refreshInFlight = refresh;
+        return refresh;
+    }
+
+    private async _refreshCredentials(): Promise<void> {
         if (!this.accountsFileExists() && this.refreshToken == undefined) {
             throw new Error('No valid authentication credentials detected.');
         }
@@ -180,17 +191,18 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
                 // E.g. re-trying after failed attempt
                 this.parseAccountsFile();
             }
-            const refreshTokenResponse = await ssOAuth.post<TokenResponse>('/token', {
+            const refreshTokenResponse = await withRequestTimeout(options => ssOAuth.post<TokenResponse>('/token', {
                 grant_type: 'refresh_token',
                 client_id: SS_OAUTH_CLIENT_ID,
                 refresh_token: this.refreshToken
             }, {
+                ...options,
                 headers: { // SS seems to need these...
                     'Host': 'auth.simplisafe.com',
                     'Content-Type': 'application/json',
                     'Auth0-Client': SS_OAUTH_AUTH0_CLIENT
                 }
-            });
+            }));
             await this._storeToken(refreshTokenResponse.data);
             this.emit(AUTH_EVENTS.REFRESH_CREDENTIALS_SUCCESS);
             if (this.log && this.debug) this.log('SimpliSafe credentials refresh was successful');
@@ -209,7 +221,8 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
     private async _storeToken(token: TokenResponse): Promise<void> {
         this.accessToken = token.access_token;
         this.refreshToken = token.refresh_token ?? this.refreshToken;
-        this.expiry = Date.now() + (parseInt(String(token.expires_in)) * 1000);
+        const expiresInMs = parseInt(String(token.expires_in)) * 1000;
+        this.expiry = Date.now() + expiresInMs;
         this.tokenType = token.token_type;
 
         const account: StoredAccount = {
@@ -231,6 +244,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
         if (this.refreshInterval) {
             clearInterval(this.refreshInterval);
         }
+        const refreshDelay = Number.isFinite(expiresInMs) ? Math.max(60000, expiresInMs - 300000) : 60000;
         this.refreshInterval = setInterval(() => {
             if (this.log && this.debug) this.log('Preemptively authenticating with SimpliSafe');
             this.refreshCredentials()
@@ -240,7 +254,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
                         clearInterval(this.refreshInterval); // just disable until next successful one
                     }
                 });
-        }, parseInt(String(token.expires_in)) * 1000 - 300000);
+        }, refreshDelay);
     }
 
 }

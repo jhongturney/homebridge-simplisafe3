@@ -1,6 +1,6 @@
 {
   "name": "homebridge-simplisafe3",
-  "version": "1.11.5-jhongturney.6",
+  "version": "1.11.5-jhongturney.7",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
   "author": "Niccolò Zapponi, shamoon",
   "funding": {
@@ -71,6 +71,7 @@
     "test": "npm run build && npm run test:unit",
     "test:unit": "node --test test/*.test.cjs",
     "test:webrtc": "node --test test/webrtc.integration.cjs",
+    "test:http": "node --test test/httpDeadline.integration.cjs",
     "lint": "eslint src",
     "typecheck": "tsc"
   },

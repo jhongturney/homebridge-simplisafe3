@@ -3,6 +3,8 @@ import axiosRetry from 'axios-retry';
 import WebSocket from 'ws';
 import EventEmitter from 'events';
 import { AUTH_EVENTS } from './lib/authManager';
+import RequestCache from './lib/requestCache';
+import withRequestTimeout from './lib/httpRequest';
 
 export const VALID_ALARM_STATES = [
     'off',
@@ -80,6 +82,11 @@ const socketHeartbeatInterval = 60 * 1000; //ms
 const ssApi = axios.create({
     baseURL: 'https://api.simplisafe.com/v1'
 });
+axiosRetry(ssApi, {
+    retries: 2,
+    // Preserve the v3 policy: do not automatically repeat rate-limited requests.
+    retryCondition: error => error.response?.status !== 429 && axiosRetry.isNetworkOrIdempotentRequestError(error)
+});
 
 const pluginUserAgent = 'homebridge-simplisafe3';
 const appHubApi = axios.create({
@@ -97,9 +104,9 @@ class SimpliSafe3 extends EventEmitter {
     subId;
     accountNumber;
     socket;
-    lastSubscriptionRequests = {};
-    lastSensorRequest;
-    lastLockRequest;
+    readCache = new RequestCache();
+    sensorPollInFlight = false;
+    alarmPollInFlight = false;
     alarmRefreshIntervalID;
     alarmSubscriptions = [];
     sensorRefreshIntervalID;
@@ -129,12 +136,6 @@ class SimpliSafe3 extends EventEmitter {
             if (this.socket) this.handleSocketConnectionFailure();
         });
         
-        axiosRetry(ssApi, {
-            retries: 2,
-            // Preserve the v3 policy: do not automatically repeat rate-limited requests.
-            retryCondition: error => error.response?.status !== 429 && axiosRetry.isNetworkOrIdempotentRequestError(error)
-        });
-
         this.resetRateLimitHandler();
     }
 
@@ -152,6 +153,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     async request(params) {
+        if (params.signal?.aborted) throw params.signal.reason || new Error('SimpliSafe request cancelled');
         if (this.isBlocked && Date.now() < this.nextAttempt) {
             let err = new RateLimitError('Blocking request: rate limited');
             throw err;
@@ -163,7 +165,7 @@ class SimpliSafe3 extends EventEmitter {
                 if (this.debug) this.log('Credentials refreshed successfully after failed request');
             } catch (credentialsErr) {
                 if (this.debug) this.log.error('Recovery credentials refresh failed with error:', credentialsErr.toJSON ? credentialsErr.toJSON() : credentialsErr);
-                if (credentialsErr.isAxiosError) {
+                if (credentialsErr.isAxiosError && credentialsErr.response) {
                     throw new Error(`${credentialsErr.response.status}: ${credentialsErr.response.statusText}`);
                 } else {
                     throw credentialsErr;
@@ -172,16 +174,19 @@ class SimpliSafe3 extends EventEmitter {
         }
 
         try {
-            const response = await ssApi.request({
+            const response = await withRequestTimeout(options => ssApi.request({
+                ...options,
                 ...params,
+                signal: options.signal,
                 headers: {
                     ...params.headers,
                     Authorization: `${this.authManager.tokenType} ${this.authManager.accessToken}`
                 }
-            });
+            }), params.signal);
             this.resetRateLimitHandler();
             return response.data;
         } catch (err) {
+            if (params.signal?.aborted) throw err;
             if (!err.response) {
                 let rateLimitError = new RateLimitError(err);
                 this.log.error('SSAPI request failed, request blocked (rate limit or auth failure?).');
@@ -201,25 +206,23 @@ class SimpliSafe3 extends EventEmitter {
         }
     }
 
+    cachedGet(url, forceRefresh = false, ttl = 0) {
+        return this.readCache.get(url, () => this.request({ method: 'GET', url }), { refresh: forceRefresh, ttl });
+    }
+
     async getUserId() {
         if (this.userId) {
             return this.userId;
         }
 
-        let data = await this.request({
-            method: 'GET',
-            url: '/api/authCheck'
-        });
+        let data = await this.cachedGet('/api/authCheck');
         this.userId = data.userId;
         return this.userId;
     }
 
     async getSubscriptions() {
         let userId = await this.getUserId();
-        let data = await this.request({
-            method: 'GET',
-            url: `/users/${userId}/subscriptions?activeOnly=false`
-        });
+        let data = await this.cachedGet(`/users/${userId}/subscriptions?activeOnly=false`);
 
         // sStatus 7: Unmonitored & self-monitoring
         // sStatus 10: Standard
@@ -255,25 +258,7 @@ class SimpliSafe3 extends EventEmitter {
             }
         }
 
-        if (forceRefresh || !this.lastSubscriptionRequests[subscriptionId]) {
-            this.lastSubscriptionRequests[subscriptionId] = await this.request({
-                method: 'GET',
-                url: `/subscriptions/${subscriptionId}/`
-            })
-                .then(sub => {
-                    return sub;
-                })
-                .catch(err => {
-                    throw err;
-                })
-                .finally(() => {
-                    setTimeout(() => {
-                        this.lastSubscriptionRequests[subscriptionId] = null;
-                    }, subscriptionCacheTime);
-                });
-        }
-
-        let data = this.lastSubscriptionRequests[subscriptionId];
+        let data = await this.cachedGet(`/subscriptions/${subscriptionId}/`, forceRefresh, subscriptionCacheTime);
         return data.subscription;
     }
 
@@ -311,6 +296,7 @@ class SimpliSafe3 extends EventEmitter {
             url: `/ss3/subscriptions/${this.subId}/state/${state}`
         });
 
+        this.readCache.clear();
         this.handleSensorRefreshLockout();
         
         return data;
@@ -321,25 +307,7 @@ class SimpliSafe3 extends EventEmitter {
             await this.getSubscription();
         }
 
-        if (forceRefresh || !this.lastSensorRequest) {
-            this.lastSensorRequest = await this.request({
-                method: 'GET',
-                url: `/ss3/subscriptions/${this.subId}/sensors?forceUpdate=${forceUpdate ? 'true' : 'false'}`
-            })
-                .then(data => {
-                    return data;
-                })
-                .catch(err => {
-                    throw err;
-                })
-                .finally(() => {
-                    setTimeout(() => {
-                        this.lastSensorRequest = null;
-                    }, sensorCacheTime);
-                });
-        }
-
-        let data = this.lastSensorRequest;
+        let data = await this.cachedGet(`/ss3/subscriptions/${this.subId}/sensors?forceUpdate=${forceUpdate ? 'true' : 'false'}`, forceRefresh, sensorCacheTime);
         return data.sensors;
     }
 
@@ -419,25 +387,7 @@ class SimpliSafe3 extends EventEmitter {
             await this.getSubscription();
         }
 
-        if (forceRefresh || !this.lastLockRequest) {
-            this.lastLockRequest = await this.request({
-                method: 'GET',
-                url: `/doorlock/${this.subId}`
-            })
-                .then(data => {
-                    return data;
-                })
-                .catch(err => {
-                    throw err;
-                })
-                .finally(() => {
-                    setTimeout(() => {
-                        this.lastLockRequest = null;
-                    }, sensorCacheTime);
-                });
-        }
-
-        let data = this.lastLockRequest;
+        let data = await this.cachedGet(`/doorlock/${this.subId}`, forceRefresh, sensorCacheTime);
         this.refreshLockoutEnabled = data.length > 0;
         return data;
 
@@ -461,7 +411,7 @@ class SimpliSafe3 extends EventEmitter {
                 state: state
             }
         });
-
+        this.readCache.clear();
         return data;
     }
 
@@ -699,7 +649,7 @@ class SimpliSafe3 extends EventEmitter {
     subscribeToSensor(id, callback) {
         if (!this.sensorRefreshIntervalID) {
             this.sensorRefreshIntervalID = setInterval(async () => {
-                if (this.sensorSubscriptions.length == 0) {
+                if (this.sensorSubscriptions.length == 0 || this.sensorPollInFlight) {
                     return;
                 }
         
@@ -708,6 +658,7 @@ class SimpliSafe3 extends EventEmitter {
                     return;
                 }
         
+                this.sensorPollInFlight = true;
                 try {
                     let sensors = await this.getSensors(true);
                     for (let sensor of sensors) {
@@ -727,6 +678,8 @@ class SimpliSafe3 extends EventEmitter {
                             this.handleErrorSuppression();
                         }
                     }
+                } finally {
+                    this.sensorPollInFlight = false;
                 }
         
             }, this.sensorRefreshTime);
@@ -743,17 +696,20 @@ class SimpliSafe3 extends EventEmitter {
         this.sensorSubscriptions = this.sensorSubscriptions.filter(sub => sub.id !== id);
         if (this.sensorSubscriptions.length == 0) {
             clearInterval(this.sensorRefreshIntervalID);
+            this.sensorRefreshIntervalID = undefined;
         }
     }
 
     subscribeToAlarmSystem(id, callback) {
         if (!this.alarmRefreshIntervalID) {
             this.alarmRefreshIntervalID = setInterval(async () => {
+                if (this.alarmSubscriptions.length == 0 || this.alarmPollInFlight) return;
                 if (this.refreshLockoutTimeoutID) {
                     if (this.debug) this.log('Refresh lockout in effect, alarm system refresh blocked.');
                     return;
                 }
 
+                this.alarmPollInFlight = true;
                 try {
                     let system = await this.getAlarmSystem(true);
                     this.alarmSubscriptions
@@ -771,6 +727,8 @@ class SimpliSafe3 extends EventEmitter {
                             this.handleErrorSuppression();
                         }
                     }
+                } finally {
+                    this.alarmPollInFlight = false;
                 }
 
             }, alarmRefreshInterval);

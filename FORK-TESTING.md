@@ -28,8 +28,9 @@ branch itself is not an installable build.
 6. **1.11.5-jhongturney.6 — camera dependency migration.** Upgrade Werift from
    0.24.4 to 0.26.0. Test encrypted HomeKit forwarding and a real local WebRTC
    connection before field testing both working cameras.
-7. **Then — request and polling performance.** Share in-flight requests and
-   credential refreshes; prevent overlapping polls; add network deadlines.
+7. **1.11.5-jhongturney.7 — request and polling performance.** Share matching
+   in-flight reads and credential refreshes, prevent overlapping sensor/alarm
+   polls, and bound API/OAuth HTTP operations with cancellation.
 8. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
    work and bound reconnect backoff with jitter.
 
@@ -141,10 +142,42 @@ events are excluded from the upstream npm publishing job.
   24 and 26. Lint/type checks pass; production lockfile audit remains clean.
 - CI runs the local WebRTC integration test on all five supported Homebridge /
   Node combinations in addition to the existing suite.
-- Field testing of checkpoint 6 is pending: check fresh snapshots and live video
-  and audio on both cameras, including closing and reopening the live view.
+- User field test passed: "Everything still works in the latest testing. Move forward."
 - Local tests verify transport, codec negotiation and RTP bytes, not decoded
   picture/audio quality or real SimpliSafe/LiveKit cloud interoperability.
+
+## Seventh checkpoint validation
+
+- Matching user/subscription discovery, subscription details, sensor and lock
+  reads share a pending request per API client. Preserve three-second successful
+  read caches with monotonic timestamps rather than expiry timers. Distinguish
+  sensor force-update flags; explicit refresh bypasses completed cache while
+  joining a matching read already underway. Failed requests are not cached.
+- Successful alarm/lock commands invalidate read caches. Older pending reads
+  cannot overwrite a newer cache entry afterward. Commands and short-lived
+  camera-room tokens are never shared by the read cache.
+- Credential refresh is shared per authentication-manager instance, including
+  scheduled and on-demand callers. Emit/store once per exchange; clear the slot
+  on success, failure or timeout. Bound unusual token refresh intervals to avoid
+  millisecond loops. Independent managers remain isolated.
+- API and OAuth HTTP operations have a 20-second total deadline, including
+  connection setup and retry delays. Abort the transport and release deadline
+  timers/listeners on every outcome. Preserve existing network-error backoff;
+  caller cancellation does not activate it. AppHub camera HTTP/media paths stay
+  unchanged in this checkpoint.
+- Sensor and alarm polling each skip ticks while their previous poll runs and
+  recover on success/failure. Keep the configured sensor cadence and 62-second
+  alarm cadence. Sensor polling can restart after the final subscription is
+  removed and later re-added. Existing lockout checks are preserved.
+- Register retries once on the shared API client. Preserve credential network
+  errors without dereferencing a missing HTTP response.
+- Controlled tests: twenty matching reads produce one transport request; twenty
+  requests with expired credentials use one OAuth exchange. A real local HTTP
+  server confirms twenty sensor reads share one request, independent commands
+  are delivered separately, and a stalled connection closes on deadline.
+- All 144 tests pass on Node 22.12.0, 24 and 26, including the local HTTP and
+  WebRTC integration tests. Lint/type checks pass; production audit is clean.
+- No dependency versions or camera media code change. Field testing is pending.
 
 ## Field checks
 

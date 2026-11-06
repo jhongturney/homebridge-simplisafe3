@@ -43,3 +43,4 @@ jobs:
       - run: npm run build
       - run: npm run test:unit
       - run: npm run test:webrtc
+      - run: npm run test:http
