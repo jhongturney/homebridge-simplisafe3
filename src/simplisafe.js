@@ -322,7 +322,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     // Idle cameras stop publishing, so the SimpliSafe apps wake them before every stream
-    async wakeCameras() {
+    async wakeCameras(signal) {
         if (!this.subId) {
             await this.getSubscription();
         }
@@ -331,7 +331,8 @@ class SimpliSafe3 extends EventEmitter {
             await this.authManager.refreshCredentials();
         }
 
-        await appHubApi.request({
+        await withRequestTimeout(options => appHubApi.request({
+            ...options,
             method: 'POST',
             url: `/v1/ss3/subscriptions/${this.subId}/camera-wakeup`,
             headers: {
@@ -339,12 +340,12 @@ class SimpliSafe3 extends EventEmitter {
                 'Content-Type': 'application/json'
             },
             data: { wakeAll: true }
-        });
+        }), signal);
     }
 
     // Returns LiveKit room details for cameras (internally 'MIST')
     // token is short lived so it must be fetched per stream, not cached
-    async getCameraLiveView(cameraUuid) {
+    async getCameraLiveView(cameraUuid, signal) {
         if (this.isBlocked && Date.now() < this.nextAttempt) {
             throw new RateLimitError('Blocking request: rate limited');
         }
@@ -358,13 +359,14 @@ class SimpliSafe3 extends EventEmitter {
         }
 
         try {
-            const response = await appHubApi.request({
+            const response = await withRequestTimeout(options => appHubApi.request({
+                ...options,
                 method: 'GET',
                 url: `/v2/cameras/${cameraUuid}/${this.subId}/live-view`,
                 headers: {
                     Authorization: `${this.authManager.tokenType} ${this.authManager.accessToken}`
                 }
-            });
+            }), signal);
             this.resetRateLimitHandler();
 
             const details = response.data && response.data.liveKitDetails;
@@ -416,7 +418,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     async startListening() {
-        if (this.socket) return;
+        if (this.socket || this.socketConnecting) return;
 
         if (!this.authManager.isAuthenticated()) {
             this.log.error('Socket connect ignored: Not authenticated with SimpliSafe');
@@ -424,7 +426,17 @@ class SimpliSafe3 extends EventEmitter {
             return;
         }
 
-        let userId = await this.getUserId();
+        let userId;
+        this.socketConnecting = true;
+        try {
+            userId = await this.getUserId();
+        } catch (err) {
+            this.handleSocketConnectionFailure();
+            return;
+        } finally {
+            this.socketConnecting = false;
+        }
+        if (this.socket) return;
         this.socket = new WebSocket(wsUrl, {
             handshakeTimeout: 5000
         });
@@ -471,7 +483,9 @@ class SimpliSafe3 extends EventEmitter {
         });
 
         this.socket.on('message', (message) => {
-            message = JSON.parse(message);
+            try { message = JSON.parse(message); }
+            catch (err) { return; }
+            if (!message || typeof message !== 'object') return;
 
             if (this.debug && !['service', 'messagequeue'].includes(message.source)) this.log('SSAPI socket received message:', message);
 
@@ -490,6 +504,7 @@ class SimpliSafe3 extends EventEmitter {
                     this.socketIsAlive = true;
                     
                     // heartbeat
+                    clearInterval(this.socketHeartbeatIntervalID);
                     this.socketHeartbeatIntervalID = setInterval(() => {
                         if (!this.socketIsAlive) {
                             if (this.debug) this.log('SSAPI socket heartbeat lost');
@@ -621,11 +636,12 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     handleSocketConnectionFailure() {
-        if (this.isAwaitingSocketReconnect || (this.socket && this.socket.readyState === WebSocket.CONNECTING)) return; // a reconnect attempt is pending / running
+        if (this.isAwaitingSocketReconnect) return; // a reconnect attempt is pending / running
 
         if (this.socket) {
             try {
                 this.socket.removeAllListeners();
+                this.socket.on('error', () => {});
                 this.socket.terminate();
             } catch (error) {
                 if (this.debug) this.log.warn('SSAPI socket error occurred during termination, perhaps socket was not yet established.', error);
@@ -633,14 +649,18 @@ class SimpliSafe3 extends EventEmitter {
             this.socket = null;
         }
 
-        clearTimeout(this.socketHeartbeatIntervalID);
+        clearInterval(this.socketHeartbeatIntervalID);
         this.socketIsAlive = false;
 
-        let retryInterval = (2 ** this.nSocketConnectFailures) * socketRetryInterval;
+        // Keep outages from overflowing Node's timer or synchronizing clients.
+        const baseInterval = Math.min(60000, (2 ** Math.min(this.nSocketConnectFailures, 6)) * socketRetryInterval);
+        const retryInterval = Math.min(60000, Math.round(baseInterval * (1 + Math.random() * 0.2)));
         if (this.debug) this.log(`SSAPI socket connection lost. Next attempt will be in ${retryInterval/1000}s.`);
-        setTimeout(async () => {
+        this.socketReconnectTimeoutID = setTimeout(async () => {
+            this.socketReconnectTimeoutID = undefined;
             this.isAwaitingSocketReconnect = false;
-            await this.startListening();
+            try { await this.startListening(); }
+            catch (err) { this.handleSocketConnectionFailure(); }
         }, retryInterval);
         this.nSocketConnectFailures++;
         this.isAwaitingSocketReconnect = true;

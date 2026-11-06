@@ -134,6 +134,22 @@ test('stopLiveKitStream is a no-op for an unknown session', () => {
     assert.doesNotThrow(() => delegate.stopLiveKitStream('uuid:missing'));
 });
 
+test('stop before stream start releases the prepared room immediately', async t => {
+    const delegate = new StreamingDelegate(createCameraStub({ getStreamProvider: () => 'livekit' }));
+    let closed = 0;
+    const timer = setTimeout(() => assert.fail('abandoned prepare timer fired'), 20000);
+    t.after(() => clearTimeout(timer));
+    delegate.pendingSessions['uuid:fixture'] = {
+        prepareTimeoutID: timer, liveKitSource: { close: () => { closed++; } },
+    };
+    let callbacks = 0;
+    await delegate.handleStreamRequest({ sessionID: 'fixture', type: 'stop' }, () => { callbacks++; });
+    assert.equal(closed, 1);
+    assert.equal(callbacks, 1);
+    assert.equal(delegate.pendingSessions['uuid:fixture'], undefined);
+    assert.equal(timer._destroyed, true);
+});
+
 test('prepareStream records pending session details for audio and video', () => {
     const delegate = new StreamingDelegate(createCameraStub());
     let callbackArgs;
@@ -295,7 +311,8 @@ test('fetchEventSnapshot polls past 404s until the recording has the frame', asy
         authHeader = options.headers.Authorization;
         return responses.shift();
     });
-    t.mock.method(global, 'setTimeout', (fn) => { fn(); return 0; });
+    const schedule = global.setTimeout;
+    t.mock.method(global, 'setTimeout', (fn, delay) => delay === 1000 ? (fn(), 0) : schedule(fn, delay));
 
     const result = await delegate.fetchEventSnapshot('https://remix.example/snap');
 

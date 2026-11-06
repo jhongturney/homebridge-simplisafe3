@@ -64,6 +64,23 @@ function realTransport(t, steps) {
     };
 }
 
+for (const operation of ['wake', 'room']) {
+    test(`camera ${operation} HTTP request is bounded and cancels its transport`, async t => {
+        const { client, calls } = realTransport(t, [{ wait: new Promise(() => {}) }]);
+        client.subId = 'fixture-sub';
+        const controller = new AbortController();
+        const pending = operation === 'wake' ? client.wakeCameras(controller.signal) : client.getCameraLiveView('fixture-camera', controller.signal);
+        await new Promise(setImmediate);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].timeout, 20000);
+        assert.equal(calls[0].signal.aborted, false);
+        controller.abort(new Error('fixture camera cancelled'));
+        await assert.rejects(pending, /fixture camera cancelled/);
+        assert.equal(calls[0].signal.aborted, true);
+        assert.equal(client.isBlocked, false);
+    });
+}
+
 test('API GET retries two temporary server failures and preserves authorization', async t => {
     const { client, calls } = realTransport(t, [{ status: 503 }, { status: 500 }, { data: { ok: true } }]);
     assert.deepEqual(await client.request({ method: 'GET', url: '/fixture' }), { ok: true });

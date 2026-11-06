@@ -177,7 +177,37 @@ events are excluded from the upstream npm publishing job.
   are delivered separately, and a stalled connection closes on deadline.
 - All 144 tests pass on Node 22.12.0, 24 and 26, including the local HTTP and
   WebRTC integration tests. Lint/type checks pass; production audit is clean.
-- No dependency versions or camera media code change. Field testing is pending.
+- No dependency versions or camera media code change.
+- User field test passed: "Everything continues to work as expected".
+
+## Eighth checkpoint validation
+
+- LiveKit setup has one 30-second deadline including wake and room lookup.
+  Closing a source aborts pending AppHub HTTP work, rejects setup promptly,
+  and prevents late lookup/negotiation results from opening another connection.
+  Individual AppHub HTTP requests also have a 20-second transport deadline.
+- Close signalling listeners, ping intervals and peer resources on setup
+  failure, timeout and stop. Handle asynchronous peer-close failures. A Stop
+  before Start immediately releases a prepared room and its expiry timer.
+- Keyframe capture observes its 15-second deadline even during connection
+  setup. Snapshot decoding has an eight-second limit, four-MiB output cap and
+  bounded diagnostic buffer; terminate stuck/excessive decoder processes.
+- Event snapshot fetches, including response bodies, abort after 15 seconds;
+  discard unsuccessful response bodies and release deadline timers. Preserve
+  the existing 404 polling interval and short HomeKit waits. Clear wait timers
+  when background work finishes first. A HomeKit eight-second wait can still
+  end before shared background warming finishes; warming remains bounded.
+- An active stream supplies snapshot keyframes without opening a second room.
+  Remove the obsolete message saying battery cameras are unsupported.
+- Event websocket retries use exponential delays with jitter capped at one
+  minute. Recover from user lookup and reconnect failures, terminate failed
+  connecting sockets, ignore malformed messages and avoid duplicate heartbeat
+  timers or simultaneous connection lookups.
+- All 162 tests pass on Node 22.12.0, 24 and 26, including real local WebRTC/HTTP
+  checks and a real child-process termination check. Lint and type checks pass;
+  production audit has zero findings. No dependency versions changed.
+- Field testing pending. Cloud camera startup timing and real devices still
+  require the user's checks, particularly after a camera has been idle.
 
 ## Field checks
 
@@ -190,7 +220,7 @@ After installing the release asset and restarting Homebridge:
 - Check that a closed privacy shutter still returns the privacy image without
   opening the shutter.
 - If using LiveKit cameras, verify thumbnails, live video/audio and notifications
-  still work; their media path is unchanged in this checkpoint.
+  still work; check idle-camera startup and close/reopen playback as well.
 - Report the camera model, Node/Homebridge versions and relevant errors, with
   credentials and tokens removed.
 

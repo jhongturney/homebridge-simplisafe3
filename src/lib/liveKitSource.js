@@ -38,14 +38,38 @@ class LiveKitSource {
     }
 
     // Resolves once the first video RTP packet arrives i.e. media is flowing
-    async connect() {
+    connect() {
+        if (this.closed) return Promise.reject(new Error('LiveKit session closed'));
+        if (this.connectPromise) return this.connectPromise;
+        this.controller = new AbortController();
+        const signal = this.controller.signal;
+        let onAbort;
+        const cancelled = new Promise((resolve, reject) => {
+            onAbort = () => reject(signal.reason);
+            signal.addEventListener('abort', onAbort, { once: true });
+        });
+        const timer = setTimeout(() => this.controller.abort(new Error(`Timed out after ${trackTimeout}ms waiting for video from ${this.ss3Camera.name}.`)), trackTimeout);
+        this.connectPromise = Promise.race([this._connect(signal), cancelled])
+            .catch(err => { this.close(); throw err; })
+            .finally(() => {
+                clearTimeout(timer);
+                signal.removeEventListener('abort', onAbort);
+                this._onFirstVideo = null;
+                this._settleConnection = null;
+            });
+        return this.connectPromise;
+    }
+
+    async _connect(signal) {
         try {
-            await this.simplisafe.wakeCameras();
+            await this.simplisafe.wakeCameras(signal);
         } catch (err) {
             if (this.debug) this.log(`LiveKit: wake request failed, continuing: ${err.message}`);
         }
 
-        const liveView = await this.simplisafe.getCameraLiveView(this.ss3Camera.id);
+        signal.throwIfAborted();
+        const liveView = await this.simplisafe.getCameraLiveView(this.ss3Camera.id, signal);
+        signal.throwIfAborted();
         if (this.debug) this.log(`LiveKit: ${this.ss3Camera.name} cameraStatus ${liveView.cameraStatus}`);
 
         const url = `${liveView.liveKitURL}/rtc?access_token=${liveView.userToken}&auto_subscribe=1&protocol=15&sdk=js&version=2.22.3`;
@@ -57,24 +81,16 @@ class LiveKitSource {
 
         return new Promise((resolve, reject) => {
             let settled = false;
-            const timeoutID = setTimeout(() => {
-                if (!settled) {
-                    settled = true;
-                    // Battery cameras sleep and may need a wake request first, which is not implemented
-                    const features = this.ss3Camera.cameraDetails && this.ss3Camera.cameraDetails.supportedFeatures;
-                    const hint = features && features.wired === false ? ' This camera is battery powered, which is not supported yet.' : '';
-                    reject(new Error(`Timed out after ${trackTimeout}ms waiting for video from ${this.ss3Camera.name}.${hint}`));
-                }
-            }, trackTimeout);
-
             const settle = (err) => {
                 if (settled) return;
                 settled = true;
-                clearTimeout(timeoutID);
                 if (err) reject(err); else resolve();
             };
 
+            this._settleConnection = settle;
+
             const send = (message) => {
+                if (this.closed) return;
                 try {
                     this.ws.send(new SignalRequest(message).toBinary());
                 } catch (err) {
@@ -82,13 +98,15 @@ class LiveKitSource {
                 }
             };
 
-            this.ws.on('error', err => { settle(err); this._sessionEnded(err.message); });
+            this.ws.on('error', err => { settle(err); this._sessionEnded(err.message); this.close(); });
             this.ws.on('close', () => {
                 settle(new Error('LiveKit signalling closed before video started'));
                 this._sessionEnded('signalling closed');
+                this.close();
             });
 
             this.ws.on('message', async data => {
+                if (this.closed) return;
                 let response;
                 try {
                     response = SignalResponse.fromBinary(new Uint8Array(data));
@@ -107,10 +125,14 @@ class LiveKitSource {
                     const sdp = message.value.sdp;
                     offerChain = offerChain
                         .then(async () => {
-                            await this.pc.setRemoteDescription({ type: 'offer', sdp: sdp });
-                            const answer = await this.pc.createAnswer();
-                            await this.pc.setLocalDescription(answer);
-                            send({ message: { case: 'answer', value: new SessionDescription({ type: 'answer', sdp: this.pc.localDescription.sdp }) } });
+                            if (this.closed || !this.pc) return;
+                            const pc = this.pc;
+                            await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
+                            if (this.closed) return;
+                            const answer = await pc.createAnswer();
+                            if (this.closed) return;
+                            await pc.setLocalDescription(answer);
+                            send({ message: { case: 'answer', value: new SessionDescription({ type: 'answer', sdp: pc.localDescription.sdp }) } });
                         })
                         .catch(err => {
                             if (this.debug) this.log.error('LiveKit: negotiation failed:', err.message);
@@ -140,6 +162,7 @@ class LiveKitSource {
     }
 
     _handleJoin(join, send) {
+        if (this.closed || this.pc) return;
         if (this.debug) this.log(`LiveKit: joined room ${join.room && join.room.name}`);
 
         this.pc = new RTCPeerConnection({
@@ -168,6 +191,11 @@ class LiveKitSource {
 
         this.pc.connectionStateChange.subscribe(state => {
             if (this.debug) this.log(`LiveKit: connection ${state} for ${this.ss3Camera.name}`);
+            if (state === 'failed') {
+                this._settleConnection?.(new Error('LiveKit media connection failed'));
+                this._sessionEnded('media connection failed');
+                this.close();
+            }
         });
 
         this.pc.onIceCandidate.subscribe(candidate => {
@@ -205,20 +233,28 @@ class LiveKitSource {
     close() {
         if (this.closed) return;
         this.closed = true;
+        const error = new Error('LiveKit session closed');
+        this.controller?.abort(error);
+        this._settleConnection?.(error);
+        this._onFirstVideo = null;
 
         clearInterval(this.pingIntervalID);
         this.streaming = false;
         this.onVideoRtp = null;
         this.onAudioRtp = null;
         this.onSessionEnded = null;
-        this.onSessionEnded = null;
 
         try {
-            if (this.pc) this.pc.close();
+            if (this.pc) Promise.resolve(this.pc.close()).catch(() => {});
         } catch (err) { /* already gone */ }
 
         try {
-            if (this.ws) this.ws.close();
+            if (this.ws) {
+                // A connecting ws emits an error when terminated; retain a sink for it.
+                this.ws.removeAllListeners();
+                this.ws.on('error', () => {});
+                this.ws.terminate();
+            }
         } catch (err) { /* already gone */ }
 
         this.pc = null;

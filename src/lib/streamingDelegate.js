@@ -27,6 +27,20 @@ const eventSnapshotTimeout = 15000; // ms, how long an event's recording may tak
 const eventSnapshotPollInterval = 1000; // ms
 const eventSnapshotWait = 3000; // ms, notification thumbnails give up a few seconds after asking
 
+// Release short HomeKit wait timers even when the shared background work wins.
+async function waitFor(promise, milliseconds, expired) {
+    let timer;
+    try {
+        return await Promise.race([promise, new Promise((resolve, reject) => {
+            timer = setTimeout(() => {
+                try { resolve(expired()); } catch (err) { reject(err); }
+            }, milliseconds);
+        })]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 const privacyShutterImage = path.resolve(__dirname, '..', 'images', 'privacyshutter_snapshot.png');
 const privacyShutterImageInBytes = fs.readFileSync(privacyShutterImage);
 const unsupportedCameraImage = path.resolve(__dirname, '..', 'images', 'unsupportedcamera_snapshot.png');
@@ -511,6 +525,12 @@ class StreamingDelegate {
                 delete this.pendingSessions[sessionIdentifier];
 
             } else if (request.type == 'stop') {
+                const prepared = this.pendingSessions[sessionIdentifier];
+                if (prepared) {
+                    clearTimeout(prepared.prepareTimeoutID);
+                    prepared.liveKitSource?.close();
+                    delete this.pendingSessions[sessionIdentifier];
+                }
                 let cmd = this.ongoingSessions[sessionIdentifier];
                 try {
                     if (cmd) {
@@ -569,13 +589,30 @@ class StreamingDelegate {
             ], { env: process.env });
 
             let chunks = [];
+            let bytes = 0;
             let stderr = '';
-            cmd.stdout.on('data', data => chunks.push(data));
-            cmd.stderr.on('data', data => { stderr += data.toString(); });
-            cmd.on('error', reject);
+            let settled = false;
+            const finish = (err, jpeg) => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                if (err) {
+                    cmd.kill('SIGKILL');
+                    reject(err);
+                } else resolve(jpeg);
+            };
+            const timer = setTimeout(() => finish(new Error('Snapshot decoder timed out')), snapshotRequestTimeout);
+            cmd.stdout.on('data', data => {
+                if (settled) return;
+                bytes += data.length;
+                if (bytes > 4 * 1024 * 1024) finish(new Error('Snapshot decoder exceeded 4 MiB'));
+                else chunks.push(data);
+            });
+            cmd.stderr.on('data', data => { stderr = (stderr + data.toString()).slice(-200); });
+            cmd.on('error', err => finish(err));
             cmd.on('close', code => {
-                if (code === 0 && chunks.length) resolve(Buffer.concat(chunks));
-                else reject(new Error(`ffmpeg exited with ${code}: ${stderr.slice(-200)}`));
+                if (code === 0 && chunks.length) finish(null, Buffer.concat(chunks));
+                else finish(new Error(`ffmpeg exited with ${code}: ${stderr}`));
             });
             cmd.stdin.on('error', () => {}); // ignore EPIPE
             cmd.stdin.end(annexB);
@@ -585,10 +622,7 @@ class StreamingDelegate {
     async handleLiveKitSnapshotRequest(callback) {
         // Motion is fetching the event's recording snapshot, usually ~2s so worth a short wait
         if (this.eventSnapshot) {
-            let fresh = await Promise.race([
-                this.eventSnapshot,
-                new Promise(resolve => setTimeout(() => resolve(null), eventSnapshotWait))
-            ]);
+            let fresh = await waitFor(this.eventSnapshot, eventSnapshotWait, () => null);
             if (fresh) {
                 callback(undefined, fresh);
                 return;
@@ -612,10 +646,9 @@ class StreamingDelegate {
             let warming = this.refreshSnapshot();
             if (!warming) throw new Error('Waiting before retrying the camera');
 
-            let snapshot = await Promise.race([
-                warming,
-                new Promise((resolve, reject) => setTimeout(() => reject(new Error('Camera did not produce a frame in time')), snapshotRequestTimeout))
-            ]);
+            let snapshot = await waitFor(warming, snapshotRequestTimeout, () => {
+                throw new Error('Camera did not produce a frame in time');
+            });
             callback(undefined, snapshot);
         } catch (err) {
             this.log.error(`Could not get snapshot for '${this.ss3Camera.name}':`, err.message);
@@ -649,29 +682,39 @@ class StreamingDelegate {
     async fetchEventSnapshot(url) {
         let start = Date.now();
         let attempts = 0;
-        for (;;) {
-            attempts++;
-            let res = await fetch(url, {
-                headers: { Authorization: `${this.ss3Camera.authManager.tokenType} ${this.ss3Camera.authManager.accessToken}` }
-            });
-            if (res.ok) {
-                let jpeg = Buffer.from(await res.arrayBuffer());
-                this.cachedSnapshot = jpeg;
-                this.cachedSnapshotExpires = Date.now() + snapshotCacheTime;
-                if (this.ss3Camera.debug) this.log(`Cached event snapshot for '${this.ss3Camera.name}' (${Math.round(jpeg.length / 1000)}kB) after ${attempts} attempt(s), ${Date.now() - start}ms`);
-                return jpeg;
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(new Error('Event snapshot timed out')), eventSnapshotTimeout);
+        try {
+            for (;;) {
+                attempts++;
+                controller.signal.throwIfAborted();
+                let res = await fetch(url, {
+                    signal: controller.signal,
+                    headers: { Authorization: `${this.ss3Camera.authManager.tokenType} ${this.ss3Camera.authManager.accessToken}` }
+                });
+                if (res.ok) {
+                    let jpeg = Buffer.from(await res.arrayBuffer());
+                    this.cachedSnapshot = jpeg;
+                    this.cachedSnapshotExpires = Date.now() + snapshotCacheTime;
+                    if (this.ss3Camera.debug) this.log(`Cached event snapshot for '${this.ss3Camera.name}' (${Math.round(jpeg.length / 1000)}kB) after ${attempts} attempt(s), ${Date.now() - start}ms`);
+                    return jpeg;
+                }
+                await res.body?.cancel();
+                if (res.status != 404 || Date.now() - start + eventSnapshotPollInterval > eventSnapshotTimeout) {
+                    throw new Error(`HTTP ${res.status} after ${attempts} attempt(s), ${Date.now() - start}ms`);
+                }
+                await new Promise(resolve => setTimeout(resolve, eventSnapshotPollInterval));
             }
-            if (res.status != 404 || Date.now() - start + eventSnapshotPollInterval > eventSnapshotTimeout) {
-                throw new Error(`HTTP ${res.status} after ${attempts} attempt(s), ${Date.now() - start}ms`);
-            }
-            await new Promise(resolve => setTimeout(resolve, eventSnapshotPollInterval));
+        } finally {
+            clearTimeout(timer);
         }
     }
 
     // Deduped + rate-limited. Returns the in flight warm, or null while backing off
     refreshSnapshot() {
         if (this.snapshotWarming) return this.snapshotWarming;
-        if (Date.now() < this.snapshotRetryAfter) return null;
+        // A running stream supplies its own keyframes; don't open another room.
+        if (Object.keys(this.liveKitSessions).length || Date.now() < this.snapshotRetryAfter) return null;
 
         this.snapshotWarming = this.warmSnapshot();
         this.snapshotWarming.catch(() => {
@@ -697,8 +740,8 @@ class StreamingDelegate {
         captured.catch(() => {});
 
         try {
-            await source.connect();
-            let annexB = await captured;
+            // A stalled connection must not hide the earlier keyframe deadline.
+            let [, annexB] = await Promise.all([source.connect(), captured]);
             let jpeg = await this.jpegFromKeyframe(annexB);
 
             this.cachedSnapshot = jpeg;
