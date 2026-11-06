@@ -19,11 +19,14 @@ branch itself is not an installable build.
    Node requirements and CI with supported Homebridge versions. Replace the
    single-command Oclif dependency with Node's built-in argument parser to remove
    the remaining production security findings.
-4. **Then — remaining dependency migrations.** Separately upgrade UI, retry and
+4. **1.11.5-jhongturney.4 — settings UI helper.** Upgrade
+   `@homebridge/plugin-ui-utils` from 0.0.19 to 2.2.7. Verify the real UI process
+   protocol and authentication routes with isolated test credentials.
+5. **Then — remaining dependency migrations.** Separately upgrade retry and
    camera dependencies. Test each affected path before proceeding.
-5. **Then — request and polling performance.** Share in-flight requests and
+6. **Then — request and polling performance.** Share in-flight requests and
    credential refreshes; prevent overlapping polls; add network deadlines.
-6. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
+7. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
    work and bound reconnect backoff with jitter.
 
 Each checkpoint waits for Homebridge field-test results before the next build.
@@ -81,7 +84,24 @@ events are excluded from the upstream npm publishing job.
 - Both the source lockfile and a clean installed release package audit with zero
   production findings. The clean production installation contains 84 packages,
   compared with 121 at checkpoint 2.
-- Field testing of the third checkpoint is pending.
+- User field test passed: "everything still works as expected".
+
+## Fourth checkpoint validation
+
+- Only the UI helper's direct version changes, from 0.0.19 to 2.2.7. No
+  application JavaScript changes; browser markup, UI routes, camera code,
+  authentication manager, CLI and polling remain the same.
+- New integration tests start the real UI server as Homebridge does, using IPC,
+  temporary storage and an isolated fake token endpoint with network guards.
+- Verify saved credentials remain unchanged on opening settings, missing
+  credentials are detected, authorization URLs and redirect parsing work, test
+  token exchanges persist correctly, failed exchanges preserve credentials, and
+  the UI process exits when the settings connection closes even with a token
+  refresh timer active.
+- All 94 tests pass on Node 22.12.0, 24 and 26; production lockfile audit remains
+  at zero findings. Lint and type checks pass.
+- Field testing of the fourth checkpoint is pending. Open the plugin's settings
+  and confirm the existing authentication status and normal controls load.
 
 ## Field checks
 
