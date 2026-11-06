@@ -1,6 +1,6 @@
 {
   "name": "homebridge-simplisafe3",
-  "version": "1.11.5-jhongturney.4",
+  "version": "1.11.5-jhongturney.5",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
   "author": "Niccolò Zapponi, shamoon",
   "funding": {
@@ -17,7 +17,7 @@
     "@homebridge/plugin-ui-utils": "2.2.7",
     "@livekit/protocol": "1.53.4",
     "axios": "1.21.0",
-    "axios-retry": "3.9.1",
+    "axios-retry": "4.5.0",
     "ffmpeg-for-homebridge": "2.2.2",
     "is-docker": "2.2.1",
     "werift": "0.24.4",

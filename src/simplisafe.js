@@ -129,7 +129,11 @@ class SimpliSafe3 extends EventEmitter {
             if (this.socket) this.handleSocketConnectionFailure();
         });
         
-        axiosRetry(ssApi, { retries: 2 });
+        axiosRetry(ssApi, {
+            retries: 2,
+            // Preserve the v3 policy: do not automatically repeat rate-limited requests.
+            retryCondition: error => error.response?.status !== 429 && axiosRetry.isNetworkOrIdempotentRequestError(error)
+        });
 
         this.resetRateLimitHandler();
     }

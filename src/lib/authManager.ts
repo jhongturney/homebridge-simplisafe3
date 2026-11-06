@@ -33,7 +33,11 @@ interface StoredAccount {
 const ssOAuth = axios.create({
     baseURL: 'https://auth.simplisafe.com/oauth'
 });
-axiosRetry(ssOAuth, { retries: 3 });
+axiosRetry(ssOAuth, {
+    retries: 3,
+    // Preserve the v3 policy: do not automatically repeat rate-limited requests.
+    retryCondition: error => error.response?.status !== 429 && axiosRetry.isNetworkOrIdempotentRequestError(error)
+});
 
 const SS_OAUTH_AUTH_URL = 'https://auth.simplisafe.com/authorize';
 const SS_OAUTH_CLIENT_ID = '42aBZ5lYrVW12jfOuu3CQROitwxg9sN5';

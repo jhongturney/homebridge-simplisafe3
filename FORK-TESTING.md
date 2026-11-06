@@ -22,11 +22,14 @@ branch itself is not an installable build.
 4. **1.11.5-jhongturney.4 — settings UI helper.** Upgrade
    `@homebridge/plugin-ui-utils` from 0.0.19 to 2.2.7. Verify the real UI process
    protocol and authentication routes with isolated test credentials.
-5. **Then — remaining dependency migrations.** Separately upgrade retry and
-   camera dependencies. Test each affected path before proceeding.
-6. **Then — request and polling performance.** Share in-flight requests and
+5. **1.11.5-jhongturney.5 — HTTP retry helper.** Update axios-retry from 3.9.1 to
+   4.5.0. Preserve retry limits and the v3 policy of not automatically retrying
+   HTTP 429; verify real Axios/retry behavior with an isolated response adapter.
+6. **Then — camera dependency migration.** Test the newer WebRTC implementation
+   separately against both working cameras.
+7. **Then — request and polling performance.** Share in-flight requests and
    credential refreshes; prevent overlapping polls; add network deadlines.
-7. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
+8. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
    work and bound reconnect backoff with jitter.
 
 Each checkpoint waits for Homebridge field-test results before the next build.
@@ -100,8 +103,27 @@ events are excluded from the upstream npm publishing job.
   refresh timer active.
 - All 94 tests pass on Node 22.12.0, 24 and 26; production lockfile audit remains
   at zero findings. Lint and type checks pass.
-- Field testing of the fourth checkpoint is pending. Open the plugin's settings
-  and confirm the existing authentication status and normal controls load.
+- User field test passed: "everything still works". Informational UI log entries
+  `Incoming Request: /credentialsExist`, `/getCodeVerifier`, and `/getSSAuthURL`
+  were observed. They are emitted unconditionally by the UI helper when settings
+  initializes and do not represent cloud requests, token refreshes or errors.
+  The helper exposes no logging switch for these lines; leave them unchanged.
+
+## Fifth checkpoint validation
+
+- Only axios-retry's locked version changes, 3.9.1 → 4.5.0. Configured retry
+  limits remain two for the API and three for OAuth.
+- V4 adds automatic HTTP 429 retries by default. Explicitly exclude these on
+  both clients to preserve the previous policy and avoid repeating rate-limited
+  requests. Retryable server responses now honor the library's Retry-After delay.
+- Add eleven integration tests using the actual Axios/retry stack with fake
+  responses and network guards: successful/exhausted retries, authorization
+  headers, non-repeated state-changing POSTs after server errors, 401/403/429,
+  existing block handling, token refresh persistence, and Retry-After scheduling.
+- All 105 tests pass on Node 22.12.0, 24 and 26; lint and type checks pass.
+  Production lockfile audit remains at zero findings.
+- Camera implementation, UI helper and UI request logging remain unchanged.
+- Field testing of the fifth checkpoint is pending.
 
 ## Field checks
 
