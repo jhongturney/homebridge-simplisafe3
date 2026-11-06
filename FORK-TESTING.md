@@ -31,7 +31,7 @@ branch itself is not an installable build.
 7. **1.11.5-jhongturney.7 — request and polling performance.** Share matching
    in-flight reads and credential refreshes, prevent overlapping sensor/alarm
    polls, and bound API/OAuth HTTP operations with cancellation.
-8. **Then — camera cleanup and reconnect behavior.** Cancel timed-out camera
+8. **1.11.5-jhongturney.8 — camera cleanup and reconnect behavior.** Cancel timed-out camera
    work and bound reconnect backoff with jitter.
 
 Each checkpoint waits for Homebridge field-test results before the next build.
@@ -206,8 +206,20 @@ events are excluded from the upstream npm publishing job.
 - All 162 tests pass on Node 22.12.0, 24 and 26, including real local WebRTC/HTTP
   checks and a real child-process termination check. Lint and type checks pass;
   production audit has zero findings. No dependency versions changed.
-- Field testing pending. Cloud camera startup timing and real devices still
-  require the user's checks, particularly after a camera has been idle.
+- User field test passed: "Everything still works, great".
+- All eight planned checkpoints have passed user field testing. Keep checkpoint
+  8 as the current tested build. Local fixtures and the user's installation
+  cover different cases; neither establishes support for every camera model
+  or every possible cloud outage.
+
+## Current status
+
+The planned dependency/security and performance sequence is complete through
+`1.11.5-jhongturney.8`, with user field-test confirmation at every checkpoint.
+No additional runtime release is needed to record this result. Optional future
+maintenance includes build/lint dependencies and Docker detection. These are
+separate from the completed eight-stage sequence. Upstream submission and npm
+publication remain outside this testing workflow.
 
 ## Field checks
 
