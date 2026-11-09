@@ -1,4 +1,5 @@
 import safeLogger from './lib/safeLogger';
+import { requestFailureMessage } from './lib/requestDiagnostics';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import WebSocket from 'ws';
@@ -177,6 +178,7 @@ class SimpliSafe3 extends EventEmitter {
             }
         }
 
+        const requestStarted = performance.now();
         try {
             const response = await withRequestTimeout(options => ssApi.request({
                 ...options,
@@ -193,16 +195,15 @@ class SimpliSafe3 extends EventEmitter {
             if (params.signal?.aborted || this.lifecycle.signal.aborted) throw err;
             if (!err.response) {
                 let rateLimitError = new RateLimitError(err);
-                this.log.error('SSAPI request failed, request blocked (rate limit or auth failure?).');
                 this.setRateLimitHandler();
+                this.log.error(requestFailureMessage(params, err, Math.max(0, Math.ceil((this.nextAttempt - Date.now()) / 1000)), performance.now() - requestStarted));
                 throw rateLimitError;
             }
 
             let statusCode = err.response.status;
             if (statusCode == 403) {
-                this.log.error('SSAPI request failed, request blocked (rate limit or auth failure?).');
-                if (this.debug) this.log.error('SSAPI request received a response error with code 403:', err.response.statusText);
                 this.setRateLimitHandler();
+                this.log.error(requestFailureMessage(params, err, Math.max(0, Math.ceil((this.nextAttempt - Date.now()) / 1000)), performance.now() - requestStarted));
                 throw new RateLimitError(err.response.data);
             } else {
                 throw err.response.data;

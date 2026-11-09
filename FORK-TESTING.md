@@ -44,6 +44,10 @@ branch itself is not an installable build.
     timing, coordinated shutdown/disposal, media bounds and legacy stream
     startup into one field-test build. Includes checkpoint 9's log protection.
 
+11. **1.11.5-jhongturney.11 — actionable API failure diagnostics.** Replace the
+    ambiguous cooldown warning with operation, elapsed time, HTTP status or
+    network error code/category, and the actual cooldown duration. Logging only.
+
 The first eight checkpoints were individually field-tested. The user authorized
 combining the remaining follow-up fixes in checkpoint 10; checkpoint 9 has no
 separate field-test confirmation yet.
@@ -294,11 +298,35 @@ events are excluded from the upstream npm publishing job.
 - Field testing pending. Checkpoint 8 remains the last explicitly confirmed
   user-tested version. This combined build includes checkpoint 9's logging fixes.
 
+## Eleventh checkpoint validation
+
+- Replace the existing two ambiguous SSAPI cooldown warning sites: HTTP 403 and
+  failures without an HTTP response. Identify HTTP 403, timeout, DNS, TLS,
+  connection failures and unclassified request errors without guessing that a
+  missing response proves rate limiting or invalid credentials.
+- Include a static operation label and elapsed HTTP-operation time, including
+  retries. Report the actual current cooldown (for example 60 or 120 seconds).
+  The time does not include a preceding OAuth refresh. The duration indicates
+  eligibility for a later request, not a promise to send a request at that time.
+- Use static labels for current routes and a generic label for unknown routes.
+  Never log raw URLs, account/device IDs, headers, request or response bodies,
+  arbitrary error messages, statusText or request config in these diagnostics.
+- Keep existing retries, deadlines, thrown errors and cooldown behavior. Do not
+  add new warnings for other HTTP statuses, successful requests, skipped requests
+  during cooldown, or caller/shutdown cancellation. Remove redundant 403 debug
+  output. Realtime websocket connection messages remain unchanged.
+- All 229 tests pass on Node 22.12.0, 24 and 26. Eleven added checks cover real
+  Axios 403/network failures, total deadline expiration, escalating cooldowns,
+  cancellation, operation labels, redaction and unchanged quiet paths.
+  Lint/type checks pass; production audit is clean. No dependencies change.
+- Field testing pending; checkpoint 10 has no separate all-working confirmation.
+
 ## Current status
 
 The original eight-stage sequence is complete and field-tested. The requested
-follow-up runtime fixes are implemented together in checkpoint 10, pending user
-field testing. Lower-priority build-tool/Docker-detection maintenance and camera
+follow-up runtime fixes are included in checkpoint 10. Checkpoint 11 adds the
+requested API diagnostics and includes those runtime changes; field testing is
+pending. Lower-priority build-tool/Docker-detection maintenance and camera
 CPU profiling remain optional. HKSV is outside this sequence. Upstream submission
 and npm publication remain outside this testing workflow.
 

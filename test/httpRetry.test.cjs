@@ -44,12 +44,14 @@ function realTransport(t, steps) {
     });
     const auth = require(authPath);
     const api = require(apiPath);
-    const logger = Object.assign(() => {}, { error: () => {} });
+    const logs = [];
+    const logger = Object.assign(() => {}, { error: (...args) => logs.push(args) });
     const apiAuth = Object.assign(new EventEmitter(), {
         isAuthenticated: () => true, tokenType: 'Bearer', accessToken: 'fixture-api-token',
     });
     return {
         calls,
+        logs,
         RateLimitError: api.RateLimitError,
         client: new api.default(15000, apiAuth, os.tmpdir(), logger, false),
         oauth: () => {
@@ -65,6 +67,106 @@ function realTransport(t, steps) {
         },
     };
 }
+
+test('403 diagnostics identify the operation and actual cooldown without exposing credentials or IDs', async t => {
+    const secrets = ['fixture-private-account', 'fixture-private-token', 'fixture-private-command'];
+    const { client, logs, RateLimitError } = realTransport(t, [{ status: 403, data: { error: secrets[2] } }]);
+    client.debug = true;
+    await assert.rejects(client.request({
+        method: 'GET', url: `/ss3/subscriptions/${secrets[0]}/sensors?access_token=${secrets[1]}`,
+        headers: { Authorization: `Bearer ${secrets[1]}` }, data: { private: secrets[2] },
+    }), error => error instanceof RateLimitError);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0][0], /^SSAPI GET sensors failed after \d+ms: HTTP 403 Forbidden\./);
+    assert.match(logs[0][0], /Plugin API cooldown: 60s/);
+    for (const secret of secrets) assert.equal(JSON.stringify(logs).includes(secret), false);
+    assert.ok(client.nextAttempt > Date.now());
+});
+
+for (const [code, category] of [['ECONNRESET', 'connection failure'], ['ENOTFOUND', 'DNS failure'], ['CERT_HAS_EXPIRED', 'TLS failure'], ['ETIMEDOUT', 'request timeout']]) {
+    test(`${code} diagnostics identify the failure without claiming an HTTP response`, async t => {
+        const { client, logs, RateLimitError } = realTransport(t, [{ code }]);
+        await assert.rejects(client.request({ method: 'POST', url: '/ss3/subscriptions/fixture/state/home' }), error => error instanceof RateLimitError);
+        assert.equal(logs.length, 1);
+        assert.match(logs[0][0], /POST alarm command/);
+        assert.ok(logs[0][0].includes(`${category} (${code}; no HTTP response)`));
+        assert.match(logs[0][0], /cooldown: 60s/);
+    });
+}
+
+test('the total request deadline produces a timeout diagnostic with no HTTP response', async t => {
+    const original = global.setTimeout;
+    let expire;
+    t.mock.method(global, 'setTimeout', (fn, delay, ...args) => {
+        if (delay === 20000 && !expire) expire = fn;
+        return original(fn, delay, ...args);
+    });
+    const { client, logs } = realTransport(t, [{ wait: new Promise(() => {}) }]);
+    const failed = assert.rejects(client.request({ method: 'GET', url: '/subscriptions/fixture/' }));
+    await new Promise(setImmediate);
+    expire();
+    await failed;
+    assert.equal(logs.length, 1);
+    assert.match(logs[0][0], /GET subscription details/);
+    assert.match(logs[0][0], /request timeout \(TimeoutError; no HTTP response\)/);
+    assert.match(logs[0][0], /cooldown: 60s/);
+});
+
+test('diagnostics follow the existing escalating cooldown and do not repeat while requests are blocked', async t => {
+    const { client, logs, calls } = realTransport(t, [{ status: 403 }]);
+    await assert.rejects(client.request({ method: 'GET', url: '/doorlock/fixture' }));
+    await assert.rejects(client.request({ method: 'GET', url: '/doorlock/fixture' }));
+    assert.equal(logs.length, 1);
+    assert.equal(calls.length, 1);
+    client.nextAttempt = 0;
+    await assert.rejects(client.request({ method: 'GET', url: '/doorlock/fixture' }));
+    assert.equal(logs.length, 2);
+    assert.match(logs[1][0], /GET locks/);
+    assert.match(logs[1][0], /cooldown: 120s/);
+});
+
+for (const cancel of ['caller', 'shutdown']) {
+    test(`${cancel} cancellation produces no failure or cooldown diagnostic`, async t => {
+        const { client, calls, logs } = realTransport(t, [{ wait: new Promise(() => {}) }]);
+        const controller = new AbortController();
+        const failed = assert.rejects(client.request({ method: 'GET', url: '/fixture', signal: controller.signal }));
+        await new Promise(setImmediate);
+        assert.equal(calls.length, 1);
+        if (cancel === 'caller') controller.abort(new Error('fixture cancelled'));
+        else client.dispose();
+        await failed;
+        assert.deepEqual(logs, []);
+        assert.equal(client.isBlocked, false);
+    });
+}
+
+test('successful reads stay quiet and HTTP statuses without a cooldown keep their existing behavior', async t => {
+    const { client, logs } = realTransport(t, [{ data: { ok: true } }, { status: 429 }]);
+    assert.deepEqual(await client.request({ method: 'GET', url: '/fixture' }), { ok: true });
+    await assert.rejects(client.request({ method: 'GET', url: '/fixture' }));
+    assert.equal(client.isBlocked, false);
+    assert.deepEqual(logs, []);
+});
+
+test('diagnostic operation labels cover existing routes and never print unknown paths or malformed methods', () => {
+    const { apiOperation, requestFailureMessage } = require(path.join(packageRoot, 'lib/requestDiagnostics'));
+    for (const [method, url, expected] of [
+        ['GET', '/api/authCheck', 'GET authentication check'],
+        ['GET', '/users/private/subscriptions?activeOnly=false', 'GET subscription list'],
+        ['GET', '/subscriptions/private/', 'GET subscription details'],
+        ['GET', '/ss3/subscriptions/private/sensors?forceUpdate=true', 'GET sensors'],
+        ['POST', '/ss3/subscriptions/private/state/home', 'POST alarm command'],
+        ['GET', '/doorlock/private', 'GET locks'],
+        ['POST', '/doorlock/private/lock-private/state', 'POST lock command'],
+        ['GET\n', 'https://user:private@fixture.invalid/private?access_token=private', 'REQUEST API request'],
+    ]) assert.equal(apiOperation({ method, url }), expected);
+    const output = requestFailureMessage({ method: 'GET', url: '/private-token-path' }, {
+        code: 'fixture-private-code', message: 'fixture-private-message', config: { secret: 'fixture-private-config' },
+    }, 60, 120);
+    assert.match(output, /GET API request/);
+    assert.match(output, /request error \(no error code; no HTTP response\)/);
+    assert.equal(output.includes('private'), false);
+});
 
 for (const operation of ['wake', 'room']) {
     test(`camera ${operation} HTTP request is bounded and cancels its transport`, async t => {
