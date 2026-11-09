@@ -1,9 +1,10 @@
+import safeLogger from '../lib/safeLogger';
 class SimpliSafe3Accessory {
     services = [];
 
     constructor (name, id, log, debug, simplisafe, api) {
         this.id = id;
-        this.log = log;
+        this.log = safeLogger(log);
         this.debug = debug;
         this.name = name;
         this.simplisafe = simplisafe;

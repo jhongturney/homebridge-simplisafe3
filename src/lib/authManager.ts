@@ -1,3 +1,4 @@
+import safeLogger from './safeLogger';
 // © 2021 Michael Shamoon
 // SimpliSafe 3 Authentication Manager
 
@@ -67,7 +68,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
     constructor(storagePath: string, log?: Logger, debug?: boolean) {
         super();
         this.storagePath = storagePath;
-        this.log = log || console.log;
+        this.log = safeLogger(log || console.log);
         this.debug = debug || false;
 
         this.parseAccountsFile();
@@ -249,7 +250,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
             if (this.log && this.debug) this.log('Preemptively authenticating with SimpliSafe');
             this.refreshCredentials()
                 .catch((err: AxiosError) => {
-                    if (this.log && this.log.error) this.log.error(err.toJSON ? err.toJSON() : err);
+                    if (this.log && this.log.error) this.log.error(err);
                     if (err.response && (err.response.status == 403 || err.response.data == 'Unauthorized')) {
                         clearInterval(this.refreshInterval); // just disable until next successful one
                     }

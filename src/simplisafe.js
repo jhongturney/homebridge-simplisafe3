@@ -1,3 +1,4 @@
+import safeLogger from './lib/safeLogger';
 import axios from 'axios';
 import axiosRetry from 'axios-retry';
 import WebSocket from 'ws';
@@ -128,7 +129,7 @@ class SimpliSafe3 extends EventEmitter {
     constructor(sensorRefreshTime = 15000, authManager, storagePath, log, debug) {
         super();
         this.sensorRefreshTime = sensorRefreshTime;
-        this.log = log || console.log;
+        this.log = safeLogger(log || console.log);
         this.debug = debug;
         this.storagePath = storagePath;
         this.authManager = authManager;
@@ -164,7 +165,7 @@ class SimpliSafe3 extends EventEmitter {
                 await this.authManager.refreshCredentials();
                 if (this.debug) this.log('Credentials refreshed successfully after failed request');
             } catch (credentialsErr) {
-                if (this.debug) this.log.error('Recovery credentials refresh failed with error:', credentialsErr.toJSON ? credentialsErr.toJSON() : credentialsErr);
+                if (this.debug) this.log.error('Recovery credentials refresh failed with error:', credentialsErr);
                 if (credentialsErr.isAxiosError && credentialsErr.response) {
                     throw new Error(`${credentialsErr.response.status}: ${credentialsErr.response.statusText}`);
                 } else {

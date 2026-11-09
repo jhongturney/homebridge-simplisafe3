@@ -1,4 +1,5 @@
 const { HomebridgePluginUiServer } = require('@homebridge/plugin-ui-utils');
+const { safeLogValue } = require('../lib/safeLogger');
 const { SimpliSafe3AuthenticationManager } = require('../lib/authManager');
 
 // your class MUST extend the HomebridgePluginUiServer
@@ -64,7 +65,7 @@ class UiServer extends HomebridgePluginUiServer {
          try {
            await this.authManager.getToken(code);
          } catch (error) {
-             console.log(error);
+             console.log(safeLogValue(error));
              return { success: false, error: error.toString() }
          }
          return {

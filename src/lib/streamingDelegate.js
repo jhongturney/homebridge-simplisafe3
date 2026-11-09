@@ -1,3 +1,4 @@
+import { lineLogger } from './safeLogger';
 import { spawn } from 'child_process';
 import jpegSnapshot from './jpegSnapshot';
 import crypto from 'crypto';
@@ -480,6 +481,7 @@ class StreamingDelegate {
                             this.log([this.ss3Camera.ffmpegPath, source.join(' '), video.join(' '), audio.join(' ')].join(' '));
                         }
     
+                        const logDiagnostic = lineLogger(this.log);
                         let started = false;
                         cmd.stderr.on('data', data => {
                             if (!started) {
@@ -488,7 +490,7 @@ class StreamingDelegate {
                                 callback(); // do not forget to execute callback once set up
                             }
                             if (this.ss3Camera.debug) {
-                                this.log(data.toString());
+                                logDiagnostic(data);
                             }
                         });
     

@@ -34,6 +34,22 @@ branch itself is not an installable build.
 8. **1.11.5-jhongturney.8 — camera cleanup and reconnect behavior.** Cancel timed-out camera
    work and bound reconnect backoff with jitter.
 
+## Follow-up improvements
+
+9. **1.11.5-jhongturney.9 — credential-safe logging.** Redact authentication
+   and camera-session secrets at shared log boundaries, preserve diagnostic
+   status/code information, and handle split FFmpeg diagnostic lines safely.
+10. **Next — authentication persistence and recovery.** Replace credential files
+    safely, handle malformed files, and distinguish throttling from revoked
+    credentials. Account for multiple writers and rotated refresh tokens.
+11. **Then — async callbacks and event timing.** Complete failed snapshot
+    callbacks, catch lock-event promise failures, and restart motion reset
+    timers when events overlap.
+12. **Then — coordinated shutdown and disposal.** Stop polling, refresh,
+    reconnect and camera work together; release owned event listeners.
+13. **Then — media limits and legacy startup.** Bound event-image and H.264
+    buffers and make legacy startup completion/deadline handling reliable.
+
 Each checkpoint waits for Homebridge field-test results before the next build.
 No upstream PR or npm registry release is created by this workflow. Fork release
 events are excluded from the upstream npm publishing job.
@@ -212,14 +228,41 @@ events are excluded from the upstream npm publishing job.
   cover different cases; neither establishes support for every camera model
   or every possible cloud outage.
 
+## Ninth checkpoint validation
+
+- One shared logger wrapper sanitizes callable logs and level methods at the
+  platform, API, authentication manager and accessory boundaries. Reuse wrappers
+  and preserve the original logger receiver and log level.
+- Error logs retain name, message, code, status and sanitized causes. Do not
+  serialize full Axios request/config objects or invoke their toJSON methods.
+  Existing diagnostic logging no longer calls error.toJSON before sanitizing.
+- Redact recognized token/authorization/password/PKCE/session credential fields,
+  JSON bodies, credential-bearing URL parameters, SRTP keys/salts, binary values,
+  and common credential text. Produce detached output without changing active
+  requests, persisted tokens, HomeKit keys or responses. Bound object traversal
+  and handle cycles; avoid getters and custom inspection functions.
+- Legacy FFmpeg diagnostics are assembled by line before redaction so split
+  chunks do not expose tokens. Suppress oversized (>8192 characters) and
+  incomplete final lines. Redact the existing command-line debug log as well.
+- UI error logging and CLI error output use the sanitizer. The explicit login
+  URL shown by the interactive CLI remains usable; UI authentication responses
+  and protocol behavior remain unchanged. Existing informational incoming UI
+  request logs remain expected.
+- All 178 tests pass on Node 22.12.0, 24 and 26, including local HTTP/WebRTC.
+  Sixteen new tests cover real Axios serialization, scheduled OAuth failure,
+  platform startup failure, camera preparation keys, logger levels/receivers,
+  nested JSON, cycles, custom serializers and split/oversized FFmpeg lines.
+  Lint and type checks pass. Production audit has zero findings.
+- No dependency versions or camera transport behavior change. Field testing
+  pending; checkpoint 8 remains the last user-confirmed build.
+
 ## Current status
 
-The planned dependency/security and performance sequence is complete through
-`1.11.5-jhongturney.8`, with user field-test confirmation at every checkpoint.
-No additional runtime release is needed to record this result. Optional future
-maintenance includes build/lint dependencies and Docker detection. These are
-separate from the completed eight-stage sequence. Upstream submission and npm
-publication remain outside this testing workflow.
+The original eight-stage sequence is complete and field-tested. The follow-up
+sequence starts with checkpoint 9, followed by the authentication, event,
+shutdown and media fixes above. Build-tool/Docker-detection maintenance and
+camera CPU profiling remain lower-priority work. HKSV is outside this sequence.
+Upstream submission and npm publication remain outside this testing workflow.
 
 ## Field checks
 

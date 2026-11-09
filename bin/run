@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
 require('../lib/cli').run().catch(error => {
-    console.error(error.message);
+    console.error(require('../lib/safeLogger').redactText(error.message));
     process.exitCode = 1;
 });
