@@ -79,15 +79,16 @@ class SS3MotionSensor extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.on(EVENT_TYPES.MOTION, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.MOTION, (data) => {
             if (!this._validateEvent(EVENT_TYPES.MOTION, data)) return;
             this.accessory.getService(this.api.hap.Service.MotionSensor).updateCharacteristic(this.api.hap.Characteristic.MotionDetected, true);
-            setTimeout(() => {
+            this.cancelTimer(this.motionResetTimer);
+            this.motionResetTimer = this.defer(() => {
                 this.accessory.getService(this.api.hap.Service.MotionSensor).updateCharacteristic(this.api.hap.Characteristic.MotionDetected, false);
             }, 10000);
         });
 
-        this.simplisafe.subscribeToSensor(this.id, sensor => {
+        this.subscribeSensor(sensor => {
             if (sensor.flags) {
                 if (sensor.flags.lowBattery) {
                     this.accessory.getService(this.api.hap.Service.MotionSensor).updateCharacteristic(this.api.hap.Characteristic.StatusLowBattery, this.api.hap.Characteristic.StatusLowBattery.BATTERY_LEVEL_LOW);

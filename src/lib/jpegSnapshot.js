@@ -5,7 +5,8 @@ const jpegEnd = Buffer.from([0xff, 0xd9]);
 
 // Read one JPEG from a JPEG or MJPEG response, then close the stream immediately.
 // Keep chunks separately so a large frame does not get copied on every packet.
-export default function jpegSnapshot(url, { headers, timeoutMs = 7000, maxBytes = 4 * 1024 * 1024 } = {}) {
+export default function jpegSnapshot(url, { headers, timeoutMs = 7000, maxBytes = 4 * 1024 * 1024, signal } = {}) {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     return new Promise((resolve, reject) => {
         let request;
         let response;
@@ -20,14 +21,17 @@ export default function jpegSnapshot(url, { headers, timeoutMs = 7000, maxBytes 
             if (settled) return;
             settled = true;
             clearTimeout(timer);
+            signal?.removeEventListener('abort', cancel);
             if (response) response.destroy();
             if (request) request.destroy();
             if (error) reject(error); else resolve(jpeg);
         };
 
+        const cancel = () => finish(signal.reason);
+        signal?.addEventListener('abort', cancel, { once: true });
         // This is a wall-clock deadline, including DNS, TLS and the response body.
         timer = setTimeout(() => finish(new Error('Camera snapshot timed out')), timeoutMs);
-        request = get(url, { headers }, res => {
+        request = get(url, { headers, signal }, res => {
             response = res;
             res.on('error', error => finish(error));
             if (settled) {

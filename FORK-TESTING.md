@@ -39,18 +39,14 @@ branch itself is not an installable build.
 9. **1.11.5-jhongturney.9 — credential-safe logging.** Redact authentication
    and camera-session secrets at shared log boundaries, preserve diagnostic
    status/code information, and handle split FFmpeg diagnostic lines safely.
-10. **Next — authentication persistence and recovery.** Replace credential files
-    safely, handle malformed files, and distinguish throttling from revoked
-    credentials. Account for multiple writers and rotated refresh tokens.
-11. **Then — async callbacks and event timing.** Complete failed snapshot
-    callbacks, catch lock-event promise failures, and restart motion reset
-    timers when events overlap.
-12. **Then — coordinated shutdown and disposal.** Stop polling, refresh,
-    reconnect and camera work together; release owned event listeners.
-13. **Then — media limits and legacy startup.** Bound event-image and H.264
-    buffers and make legacy startup completion/deadline handling reliable.
+10. **1.11.5-jhongturney.10 — combined runtime improvements.** At the user's
+    request, group authentication storage/recovery, async callbacks and motion
+    timing, coordinated shutdown/disposal, media bounds and legacy stream
+    startup into one field-test build. Includes checkpoint 9's log protection.
 
-Each checkpoint waits for Homebridge field-test results before the next build.
+The first eight checkpoints were individually field-tested. The user authorized
+combining the remaining follow-up fixes in checkpoint 10; checkpoint 9 has no
+separate field-test confirmation yet.
 No upstream PR or npm registry release is created by this workflow. Fork release
 events are excluded from the upstream npm publishing job.
 
@@ -256,13 +252,55 @@ events are excluded from the upstream npm publishing job.
 - No dependency versions or camera transport behavior change. Field testing
   pending; checkpoint 8 remains the last user-confirmed build.
 
+## Tenth checkpoint validation
+
+- Credential writes use a private (0600) temporary file, flush it and atomically
+  replace the live file. Failed replacement preserves the prior file. Malformed
+  files report a recovery message without crashing construction or overwriting
+  the original. Validate required token fields before publishing them.
+- Add proper-lockfile 4.1.2 for cross-process coordination across updated plugin,
+  UI and CLI instances. Lock the entire read/refresh/write transaction, reload
+  the newest token under the lock, handle stale locks and cancel lock waiters
+  during shutdown. Keep the login challenge consistent if a verifier changes.
+  Coordination applies to writers using this updated code and the same storage;
+  older plugin processes and unrelated hosts do not participate in the lock.
+- Retain credentials on HTTP 429 and generic temporary errors; defer throttled
+  refreshes according to Retry-After with 60-second to one-hour bounds. Background
+  transient-error retries use 60–300 seconds. Invalidate credentials for explicit
+  invalid_grant / unauthorized responses, not every 4xx. Refresh timers do not
+  keep a closed UI process alive on their own. OAuth transport deadline stays
+  20 seconds; lock acquisition has a separate cancellable 15-second bound.
+- Complete snapshot and stream callbacks once, including failed privacy checks,
+  cancellation and early process exits. Catch asynchronous lock-event failures.
+  Camera and motion-sensor reset timers restart after the most recent event,
+  preserving their five- and ten-second quiet periods respectively.
+- Track owned accessory listeners, timers and polling subscriptions. Platform
+  shutdown and actual accessory removal dispose owned resources. Cancel API and
+  OAuth transport work, reconnect/polling timers, prepared and active camera
+  sessions, event-image downloads and decoders. Prevent late operations from
+  restarting timers, discovery or camera work. Leave other listeners intact.
+- Event snapshots have a streaming four-MiB cap as well as their 15-second time
+  limit. H.264 collection allows eight MiB per access unit/fragment, 8192 parts
+  and 64-KiB parameter sets; discard oversized/incomplete units and recover on
+  a subsequent valid keyframe. Existing codec negotiation and forwarding remain.
+- Legacy FFmpeg startup waits for progress reporting a video frame rather than
+  arbitrary stderr text. Bound hostname lookup and startup separately to 20
+  seconds, report failure once, and stop abandoned processes. This is a startup
+  bound, not a duration limit on active viewing. LiveKit startup remains unchanged.
+- All 218 tests pass on Node 22.12.0, 24 and 26; lint/type checks pass. Forty new
+  checks include actual two-process token rotation, stale-lock recovery, interrupted
+  writes, shutdown HTTP cancellation, callbacks/events, media caps and startup.
+  Production audit has zero findings. Other dependency versions are unchanged.
+- Field testing pending. Checkpoint 8 remains the last explicitly confirmed
+  user-tested version. This combined build includes checkpoint 9's logging fixes.
+
 ## Current status
 
-The original eight-stage sequence is complete and field-tested. The follow-up
-sequence starts with checkpoint 9, followed by the authentication, event,
-shutdown and media fixes above. Build-tool/Docker-detection maintenance and
-camera CPU profiling remain lower-priority work. HKSV is outside this sequence.
-Upstream submission and npm publication remain outside this testing workflow.
+The original eight-stage sequence is complete and field-tested. The requested
+follow-up runtime fixes are implemented together in checkpoint 10, pending user
+field testing. Lower-priority build-tool/Docker-detection maintenance and camera
+CPU profiling remain optional. HKSV is outside this sequence. Upstream submission
+and npm publication remain outside this testing workflow.
 
 ## Field checks
 

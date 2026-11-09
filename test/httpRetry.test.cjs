@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const axios = require('axios');
+const waitFor = require('./helpers/wait-for.cjs');
 
 const packageRoot = path.resolve(process.env.SIMPLISAFE_HTTP_TEST_ROOT || path.join(__dirname, '..', 'dist'));
 const apiPath = require.resolve(path.join(packageRoot, 'simplisafe'));
@@ -55,8 +56,9 @@ function realTransport(t, steps) {
             const storage = fs.mkdtempSync(path.join(os.tmpdir(), 'ss3-retry-test-'));
             const manager = new auth.default(storage, logger, false);
             manager.refreshToken = 'fixture-old-refresh';
-            t.after(() => {
-                clearInterval(manager.refreshInterval);
+            t.after(async () => {
+                manager.dispose();
+                await manager.refreshInFlight?.catch(() => {});
                 fs.rmSync(storage, { recursive: true, force: true });
             });
             return { manager, storage };
@@ -145,7 +147,7 @@ test('OAuth server errors do not repeat the POST or clear a valid refresh token'
 });
 
 test('OAuth invalid credentials are not retried', async t => {
-    const { calls, oauth } = realTransport(t, [{ status: 400 }]);
+    const { calls, oauth } = realTransport(t, [{ status: 400, data: { error: 'invalid_grant' } }]);
     const { manager } = oauth();
     await assert.rejects(manager.refreshCredentials(), error => axios.isAxiosError(error) && error.response.status === 400);
     assert.equal(calls.length, 1);
@@ -185,7 +187,7 @@ test('twenty requests with expired credentials share one real OAuth exchange', a
     const { manager } = oauth();
     client.authManager = manager;
     const reads = Promise.all(Array.from({ length: 20 }, (_, i) => client.request({ method: 'GET', url: `/fixture/${i}` })));
-    await new Promise(setImmediate);
+    await waitFor(() => calls.length === 1);
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, '/token');
     release();

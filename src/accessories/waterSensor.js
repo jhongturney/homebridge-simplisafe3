@@ -97,7 +97,7 @@ class SS3WaterSensor extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.subscribeToSensor(this.id, sensor => {
+        this.subscribeSensor(sensor => {
             if (this.service) {
                 if (sensor.status) {
                     if (sensor.status.triggered) {

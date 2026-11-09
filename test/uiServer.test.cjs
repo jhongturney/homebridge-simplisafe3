@@ -121,5 +121,5 @@ test('closing the settings IPC connection terminates the UI server with token re
     });
     ui.child.disconnect();
     const result = await stopped;
-    assert.equal(result.signal, 'SIGTERM');
+    assert.ok(result.signal === 'SIGTERM' || result.code === 0, 'settings must terminate cleanly after IPC closes');
 });

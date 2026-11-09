@@ -7,6 +7,25 @@ const { EventEmitter } = require('node:events');
 const root = path.resolve(process.env.SIMPLISAFE_HTTP_TEST_ROOT || path.join(__dirname, '..', 'dist'));
 const { default: SimpliSafe3, RateLimitError } = require(path.join(root, 'simplisafe'));
 
+test('client shutdown closes a real in-flight HTTP request without starting rate-limit backoff', { timeout: 5000 }, async t => {
+    let arrived, closed;
+    const received = new Promise(resolve => { arrived = resolve; });
+    const disconnected = new Promise(resolve => { closed = resolve; });
+    const server = http.createServer((request, response) => { response.on('close', closed); arrived(); });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
+    const auth = Object.assign(new EventEmitter(), { isAuthenticated: () => true, tokenType: 'Bearer', accessToken: 'fixture' });
+    const api = new SimpliSafe3(15000, auth, '/unused', () => {});
+    t.after(() => api.dispose());
+    const failed = assert.rejects(api.request({ method: 'GET', url: `http://127.0.0.1:${server.address().port}/held`, proxy: false }), /stopped/);
+    await received;
+    api.dispose();
+    await failed;
+    await disconnected;
+    assert.equal(api.isBlocked, false);
+    await assert.rejects(api.request({ method: 'GET', url: '/cannot-reopen' }), /stopped/);
+});
+
 test('HTTP deadline closes a real stalled loopback connection', { timeout: 5000 }, async t => {
     let arrived, closed;
     const received = new Promise(resolve => { arrived = resolve; });

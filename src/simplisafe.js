@@ -100,6 +100,7 @@ const appHubApi = axios.create({
 
 class SimpliSafe3 extends EventEmitter {
 
+    lifecycle = new AbortController();
     authManager;
     userId;
     subId;
@@ -133,9 +134,10 @@ class SimpliSafe3 extends EventEmitter {
         this.debug = debug;
         this.storagePath = storagePath;
         this.authManager = authManager;
-        this.authManager.on(AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, () => {
+        this.authFailureListener = () => {
             if (this.socket) this.handleSocketConnectionFailure();
-        });
+        };
+        this.authManager.on(AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, this.authFailureListener);
         
         this.resetRateLimitHandler();
     }
@@ -154,6 +156,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     async request(params) {
+        this.lifecycle.signal.throwIfAborted();
         if (params.signal?.aborted) throw params.signal.reason || new Error('SimpliSafe request cancelled');
         if (this.isBlocked && Date.now() < this.nextAttempt) {
             let err = new RateLimitError('Blocking request: rate limited');
@@ -183,11 +186,11 @@ class SimpliSafe3 extends EventEmitter {
                     ...params.headers,
                     Authorization: `${this.authManager.tokenType} ${this.authManager.accessToken}`
                 }
-            }), params.signal);
+            }), params.signal ? AbortSignal.any([params.signal, this.lifecycle.signal]) : this.lifecycle.signal);
             this.resetRateLimitHandler();
             return response.data;
         } catch (err) {
-            if (params.signal?.aborted) throw err;
+            if (params.signal?.aborted || this.lifecycle.signal.aborted) throw err;
             if (!err.response) {
                 let rateLimitError = new RateLimitError(err);
                 this.log.error('SSAPI request failed, request blocked (rate limit or auth failure?).');
@@ -324,6 +327,8 @@ class SimpliSafe3 extends EventEmitter {
 
     // Idle cameras stop publishing, so the SimpliSafe apps wake them before every stream
     async wakeCameras(signal) {
+        this.lifecycle.signal.throwIfAborted();
+        signal = signal ? AbortSignal.any([signal, this.lifecycle.signal]) : this.lifecycle.signal;
         if (!this.subId) {
             await this.getSubscription();
         }
@@ -347,6 +352,8 @@ class SimpliSafe3 extends EventEmitter {
     // Returns LiveKit room details for cameras (internally 'MIST')
     // token is short lived so it must be fetched per stream, not cached
     async getCameraLiveView(cameraUuid, signal) {
+        this.lifecycle.signal.throwIfAborted();
+        signal = signal ? AbortSignal.any([signal, this.lifecycle.signal]) : this.lifecycle.signal;
         if (this.isBlocked && Date.now() < this.nextAttempt) {
             throw new RateLimitError('Blocking request: rate limited');
         }
@@ -419,7 +426,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     async startListening() {
-        if (this.socket || this.socketConnecting) return;
+        if (this.lifecycle.signal.aborted || this.socket || this.socketConnecting) return;
 
         if (!this.authManager.isAuthenticated()) {
             this.log.error('Socket connect ignored: Not authenticated with SimpliSafe');
@@ -437,7 +444,7 @@ class SimpliSafe3 extends EventEmitter {
         } finally {
             this.socketConnecting = false;
         }
-        if (this.socket) return;
+        if (this.lifecycle.signal.aborted || this.socket) return;
         this.socket = new WebSocket(wsUrl, {
             handshakeTimeout: 5000
         });
@@ -637,7 +644,7 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     handleSocketConnectionFailure() {
-        if (this.isAwaitingSocketReconnect) return; // a reconnect attempt is pending / running
+        if (this.lifecycle.signal.aborted || this.isAwaitingSocketReconnect) return; // a reconnect attempt is pending / running
 
         if (this.socket) {
             try {
@@ -668,9 +675,10 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     subscribeToSensor(id, callback) {
+        if (this.lifecycle.signal.aborted) return () => {};
         if (!this.sensorRefreshIntervalID) {
             this.sensorRefreshIntervalID = setInterval(async () => {
-                if (this.sensorSubscriptions.length == 0 || this.sensorPollInFlight) {
+                if (this.lifecycle.signal.aborted || this.sensorSubscriptions.length == 0 || this.sensorPollInFlight) {
                     return;
                 }
         
@@ -688,6 +696,7 @@ class SimpliSafe3 extends EventEmitter {
                             .map(sub => sub.callback(sensor));
                     }
                 } catch (err) {
+                    if (this.lifecycle.signal.aborted) return;
                     if (!(err instanceof RateLimitError)) { // never log rate limit errors as they are handled elsewhere
                         if (this.debug) {
                             if (err.statusCode == 409) {
@@ -707,10 +716,15 @@ class SimpliSafe3 extends EventEmitter {
         
         }
 
-        this.sensorSubscriptions.push({
-            id: id,
-            callback: callback
-        });
+        const subscription = { id, callback };
+        this.sensorSubscriptions.push(subscription);
+        return () => {
+            this.sensorSubscriptions = this.sensorSubscriptions.filter(item => item !== subscription);
+            if (!this.sensorSubscriptions.length) {
+                clearInterval(this.sensorRefreshIntervalID);
+                this.sensorRefreshIntervalID = undefined;
+            }
+        };
     }
 
     unsubscribeFromSensor(id) {
@@ -722,9 +736,10 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     subscribeToAlarmSystem(id, callback) {
+        if (this.lifecycle.signal.aborted) return () => {};
         if (!this.alarmRefreshIntervalID) {
             this.alarmRefreshIntervalID = setInterval(async () => {
-                if (this.alarmSubscriptions.length == 0 || this.alarmPollInFlight) return;
+                if (this.lifecycle.signal.aborted || this.alarmSubscriptions.length == 0 || this.alarmPollInFlight) return;
                 if (this.refreshLockoutTimeoutID) {
                     if (this.debug) this.log('Refresh lockout in effect, alarm system refresh blocked.');
                     return;
@@ -737,6 +752,7 @@ class SimpliSafe3 extends EventEmitter {
                         .filter(sub => sub.id === system.serial)
                         .map(sub => sub.callback(system));
                 } catch (err) {
+                    if (this.lifecycle.signal.aborted) return;
                     if (!(err instanceof RateLimitError)) { // never log rate limit errors as they are handled elsewhere
                         if (this.debug) {
                             if (err.statusCode == 409) {
@@ -756,13 +772,19 @@ class SimpliSafe3 extends EventEmitter {
 
         }
 
-        this.alarmSubscriptions.push({
-            id: id,
-            callback: callback
-        });
+        const subscription = { id, callback };
+        this.alarmSubscriptions.push(subscription);
+        return () => {
+            this.alarmSubscriptions = this.alarmSubscriptions.filter(item => item !== subscription);
+            if (!this.alarmSubscriptions.length) {
+                clearInterval(this.alarmRefreshIntervalID);
+                this.alarmRefreshIntervalID = undefined;
+            }
+        };
     }
 
     handleErrorSuppression() {
+        if (this.lifecycle.signal.aborted) return;
         if (!this.errorSupperessionTimeoutID) {
             this.nSuppressedErrors = 1;
             this.errorSupperessionTimeoutID = setTimeout(() => {
@@ -776,12 +798,30 @@ class SimpliSafe3 extends EventEmitter {
     }
 
     handleSensorRefreshLockout() {
+        if (this.lifecycle.signal.aborted) return;
         if (!this.refreshLockoutEnabled) return;
         // avoid "smart lock not responding" error with refresh lockout, see issue #134
         clearTimeout(this.refreshLockoutTimeoutID);
         this.refreshLockoutTimeoutID = setTimeout(() => {
             this.refreshLockoutTimeoutID = undefined;
         }, sensorRefreshLockoutDuration);
+    }
+
+    dispose() {
+        if (this.lifecycle.signal.aborted) return;
+        this.lifecycle.abort(new Error('SimpliSafe client stopped'));
+        for (const timer of [this.sensorRefreshIntervalID, this.alarmRefreshIntervalID, this.socketHeartbeatIntervalID,
+            this.socketReconnectTimeoutID, this.refreshLockoutTimeoutID, this.errorSupperessionTimeoutID]) clearInterval(timer);
+        this.authManager.off(AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, this.authFailureListener);
+        if (this.socket) {
+            this.socket.removeAllListeners();
+            this.socket.on('error', () => {});
+            this.socket.terminate();
+            this.socket = null;
+        }
+        this.sensorSubscriptions = [];
+        this.alarmSubscriptions = [];
+        this.readCache.clear();
     }
 
 }

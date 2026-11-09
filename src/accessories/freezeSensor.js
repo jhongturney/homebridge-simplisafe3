@@ -98,7 +98,7 @@ class SS3FreezeSensor extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.subscribeToSensor(this.id, sensor => {
+        this.subscribeSensor(sensor => {
             if (this.service) {
                 if (sensor.status) {
                     let temperature = fahrenheitToCelsius(sensor.status.temperature);

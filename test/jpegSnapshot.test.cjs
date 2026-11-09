@@ -115,3 +115,22 @@ test('rejects an interrupted response and releases the request', async t => {
     await assert.rejects(pending, /connection reset/);
     assert.equal(http.request.destroyed, true);
 });
+
+test('caller cancellation closes a stalled snapshot request and response', async t => {
+    const http = transport(t, { end: false });
+    const controller = new AbortController();
+    const failed = assert.rejects(jpegSnapshot(url, { signal: controller.signal }), /fixture stopped/);
+    await new Promise(setImmediate);
+    controller.abort(new Error('fixture stopped'));
+    await failed;
+    assert.equal(http.request.destroyed, true);
+    assert.equal(http.response.destroyed, true);
+});
+
+test('an already cancelled snapshot never opens a connection', async t => {
+    const http = transport(t);
+    const controller = new AbortController();
+    controller.abort(new Error('fixture stopped'));
+    await assert.rejects(jpegSnapshot(url, { signal: controller.signal }), /fixture stopped/);
+    assert.equal(http.mock.mock.callCount(), 0);
+});

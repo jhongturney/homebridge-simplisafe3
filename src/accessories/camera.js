@@ -113,17 +113,18 @@ class SS3Camera extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.on(EVENT_TYPES.CAMERA_MOTION, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.CAMERA_MOTION, (data) => {
             if (!this._validateEvent(EVENT_TYPES.CAMERA_MOTION, data)) return;
             this.streamingDelegate.refreshSnapshotFromEvent(data);
             this.accessory.getService(this.api.hap.Service.MotionSensor).updateCharacteristic(this.api.hap.Characteristic.MotionDetected, true);
             this.motionIsTriggered = true;
-            setTimeout(() => {
+            this.cancelTimer(this.motionResetTimer);
+            this.motionResetTimer = this.defer(() => {
                 this.accessory.getService(this.api.hap.Service.MotionSensor).updateCharacteristic(this.api.hap.Characteristic.MotionDetected, false);
                 this.motionIsTriggered = false;
             }, 5000);
         });
-        this.simplisafe.on(EVENT_TYPES.DOORBELL, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.DOORBELL, (data) => {
             if (!this._validateEvent(EVENT_TYPES.DOORBELL, data)) return;
             this.streamingDelegate.refreshSnapshotFromEvent(data);
             this.accessory.getService(this.api.hap.Service.Doorbell).getCharacteristic(this.api.hap.Characteristic.ProgrammableSwitchEvent).setValue(0);

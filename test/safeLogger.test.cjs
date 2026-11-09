@@ -157,7 +157,7 @@ test('scheduled OAuth failures reach the real logger with status but without sto
     t.mock.method(global, 'setInterval', callback => { tick = callback; return {}; });
     await auth._storeToken({ access_token: sentinels[0], refresh_token: sentinels[1], expires_in: 3600, token_type: 'Bearer' });
     tick();
-    await new Promise(setImmediate);
+    await require('./helpers/wait-for.cjs')(() => calls.some(call => call.level === 'error'));
     const errors = calls.filter(call => call.level === 'error');
     assert.equal(errors.length, 1);
     assert.equal(errors[0].args[0].status, 429);

@@ -29,7 +29,7 @@ class SS3DoorLock extends SimpliSafe3Accessory {
         // SimpliSafe events
         this.startListening();
 
-        this.simplisafe.subscribeToSensor(this.id, lock => {
+        this.subscribeSensor(lock => {
             if (this.service) {
                 this.refreshState(lock);
             }
@@ -163,30 +163,33 @@ class SS3DoorLock extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.on(EVENT_TYPES.DOORLOCK_UNLOCKED, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.DOORLOCK_UNLOCKED, (data) => {
             if (!this._validateEvent(EVENT_TYPES.DOORLOCK_UNLOCKED, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.LockTargetState, this.api.hap.Characteristic.LockTargetState.UNSECURED);
             this.service.updateCharacteristic(this.api.hap.Characteristic.LockCurrentState, this.api.hap.Characteristic.LockCurrentState.UNSECURED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.DOORLOCK_LOCKED, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.DOORLOCK_LOCKED, (data) => {
             if (!this._validateEvent(EVENT_TYPES.DOORLOCK_LOCKED, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.LockTargetState, this.api.hap.Characteristic.LockTargetState.SECURED);
             this.service.updateCharacteristic(this.api.hap.Characteristic.LockCurrentState, this.api.hap.Characteristic.LockCurrentState.SECURED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.DOORLOCK_ERROR, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.DOORLOCK_ERROR, (data) => {
             if (!this._validateEvent(EVENT_TYPES.DOORLOCK_ERROR, data)) return;
             try {
                 this.getLockInformation().then((lock) => {
+                    if (this.disposed) return;
                     if (lock.status.lockJamState) {
                         this.service.updateCharacteristic(this.api.hap.Characteristic.LockCurrentState, this.api.hap.Characteristic.LockCurrentState.JAMMED);
                     } else if (lock.status.lockDisabled) {
                         this.service.updateCharacteristic(this.api.hap.Characteristic.LockCurrentState, this.api.hap.Characteristic.LockCurrentState.UNKNOWN);
                     }
+                }).catch(err => {
+                    this.log.error(`An error occurred while updating '${this.name}' lock error state:`, err);
                 });
             } catch (err) {
-                this.log.error(`An error occurred while updating '${this.name}' lock error state: ${err}`);
+                this.log.error(`An error occurred while updating '${this.name}' lock error state:`, err);
             }
         });
     }

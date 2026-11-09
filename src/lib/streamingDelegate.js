@@ -1,4 +1,5 @@
 import { lineLogger } from './safeLogger';
+import { setTimeout as delay } from 'timers/promises';
 import { spawn } from 'child_process';
 import jpegSnapshot from './jpegSnapshot';
 import crypto from 'crypto';
@@ -29,16 +30,20 @@ const eventSnapshotPollInterval = 1000; // ms
 const eventSnapshotWait = 3000; // ms, notification thumbnails give up a few seconds after asking
 
 // Release short HomeKit wait timers even when the shared background work wins.
-async function waitFor(promise, milliseconds, expired) {
-    let timer;
+async function waitFor(promise, milliseconds, expired, signal) {
+    let timer, cancel;
     try {
         return await Promise.race([promise, new Promise((resolve, reject) => {
+            cancel = () => reject(signal.reason);
+            signal?.addEventListener('abort', cancel, { once: true });
+            if (signal?.aborted) cancel();
             timer = setTimeout(() => {
                 try { resolve(expired()); } catch (err) { reject(err); }
             }, milliseconds);
         })]);
     } finally {
         clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
     }
 }
 
@@ -125,7 +130,27 @@ class StreamingDelegate {
         this.controller = cameraController;
     }
 
+    get signal() {
+        this.lifecycle ||= new AbortController();
+        return this.lifecycle.signal;
+    }
+
     async handleSnapshotRequest(request, callback) {
+        let finished = false;
+        const done = (...args) => {
+            if (finished) return;
+            finished = true;
+            this.signal.removeEventListener('abort', cancel);
+            callback(...args);
+        };
+        const cancel = () => done(this.signal.reason);
+        if (this.signal.aborted) { cancel(); return; }
+        this.signal.addEventListener('abort', cancel, { once: true });
+        try { await this._handleSnapshotRequest(request, done); }
+        catch (err) { done(err); }
+    }
+
+    async _handleSnapshotRequest(request, callback) {
         if (this.simplisafe.isBlocked && Date.now() < this.simplisafe.nextAttempt) {
             callback(new Error('Camera snapshot request blocked (rate limited)'));
             return;
@@ -135,8 +160,7 @@ class StreamingDelegate {
         if (this.ss3Camera.debug) this.log(`Handling camera snapshot for '${this.cameraDetails.cameraSettings.cameraName}' at ${resolution}`);
 
         if (this.ss3Camera.getStreamProvider() === 'livekit') {
-            this.handleLiveKitSnapshotRequest(callback);
-            return;
+            return this.handleLiveKitSnapshotRequest(callback);
         }
 
         if (this.ss3Camera.isUnsupported()) {
@@ -147,6 +171,7 @@ class StreamingDelegate {
         if (!this.ss3Camera.motionIsTriggered && this.ss3Camera.supportsPrivacyShutter()) {
             // Because if privacy shutter is closed we dont want snapshots triggering it to open
             let alarmSystem = await this.simplisafe.getAlarmSystem();
+            this.signal.throwIfAborted();
             switch (alarmSystem.alarmState) {
             case 'OFF':
                 if (this.cameraDetails.cameraSettings.shutterOff !== 'open') {
@@ -173,6 +198,7 @@ class StreamingDelegate {
 
         const url = `https://media.simplisafe.com/v1/${this.ss3Camera.cameraDetails.uuid}/mjpg?x=${request.width}&fr=1`;
         jpegSnapshot(url, {
+            signal: this.signal,
             headers: {
                 'Authorization': `Bearer ${this.ss3Camera.authManager.accessToken}`
             }
@@ -197,6 +223,7 @@ class StreamingDelegate {
     }
 
     prepareStream(request, callback) {
+        if (this.signal.aborted) { callback(this.signal.reason); return; }
         if (this.ss3Camera.debug) this.log('Prepare stream with request:', request);
         let response = {};
         let sessionInfo = {
@@ -273,6 +300,22 @@ class StreamingDelegate {
     }
 
     async handleStreamRequest(request, callback) {
+        let finished = false;
+        const done = (...args) => {
+            if (finished) return;
+            finished = true;
+            this.signal.removeEventListener('abort', cancel);
+            callback(...args);
+        };
+        const cancel = () => done(this.signal.reason);
+        if (this.signal.aborted) { cancel(); return; }
+        this.signal.addEventListener('abort', cancel, { once: true });
+        try { await this._handleStreamRequest(request, done); }
+        catch (err) { done(err); }
+    }
+
+    async _handleStreamRequest(request, callback) {
+        if (this.signal.aborted) { callback(this.signal.reason); return; }
         if (this.ss3Camera.debug) this.log('handleStreamRequest with request:', request);
 
         if (this.ss3Camera.getStreamProvider() === 'livekit' && request.type == 'start') {
@@ -297,6 +340,7 @@ class StreamingDelegate {
         }
 
         let sessionId = request.sessionID;
+        if (!sessionId) { callback(new Error('Missing camera session ID')); return; }
         if (sessionId) {
             let sessionIdentifier = this.api.hap.uuid.unparse(sessionId);
 
@@ -311,6 +355,7 @@ class StreamingDelegate {
                 }
 
                 let sessionInfo = this.pendingSessions[sessionIdentifier];
+                if (!sessionInfo) { callback(new Error('No pending session for stream start')); return; }
                 if (sessionInfo) {
                     let width = request.video.width ?? 1920;
                     let fps = this.cameraDetails.cameraSettings.admin.fps;
@@ -327,10 +372,11 @@ class StreamingDelegate {
                     }
 
                     try {
-                        let newIpAddress = await dnsLookup('media.simplisafe.com');
+                        let newIpAddress = await waitFor(dnsLookup('media.simplisafe.com'), prepareTimeout, () => { throw new Error('Camera hostname lookup timed out'); }, this.signal);
+                        this.signal.throwIfAborted();
                         this.serverIpAddress = newIpAddress.address;
                     } catch (err) {
-                        if (!this.serverIpAddress) {
+                        if (this.signal.aborted || !this.serverIpAddress) {
                             delete this.pendingSessions[sessionIdentifier];
                             this.log.error('Camera stream request failed, could not resolve hostname for media.simplisafe.com', err);
                             callback(err);
@@ -469,6 +515,7 @@ class StreamingDelegate {
 
                     try {
                         let cmd = spawn(this.ss3Camera.ffmpegPath, [
+                            '-progress', 'pipe:1', '-nostats',
                             ...source,
                             ...video,
                             ...audio
@@ -482,41 +529,44 @@ class StreamingDelegate {
                         }
     
                         const logDiagnostic = lineLogger(this.log);
+                        let settled = false;
                         let started = false;
-                        cmd.stderr.on('data', data => {
-                            if (!started) {
-                                started = true;
-                                if (this.ss3Camera.debug) this.log('FFMPEG received first frame');
-                                callback(); // do not forget to execute callback once set up
-                            }
-                            if (this.ss3Camera.debug) {
-                                logDiagnostic(data);
-                            }
+                        let stopping = false;
+                        let progress = '';
+                        const finish = err => {
+                            if (settled) return;
+                            settled = true;
+                            clearTimeout(startupTimer);
+                            this.signal.removeEventListener('abort', cancel);
+                            if (err) cmd.kill('SIGKILL');
+                            else started = true;
+                            callback(err);
+                        };
+                        const cancel = () => { stopping = true; finish(this.signal.reason || new Error('Camera stream stopped')); };
+                        cmd.stopStream = cancel;
+                        this.signal.addEventListener('abort', cancel, { once: true });
+                        const startupTimer = setTimeout(() => finish(new Error('Camera stream startup timed out')), prepareTimeout);
+                        cmd.stdout.on('data', data => {
+                            progress += data.toString();
+                            const lines = progress.split('\n');
+                            progress = lines.pop().slice(-1024);
+                            if (lines.some(line => /^frame=\s*[1-9]\d*\s*$/.test(line))) finish();
                         });
-    
+                        cmd.stderr.on('data', data => {
+                            if (this.ss3Camera.debug) logDiagnostic(data);
+                        });
                         cmd.on('error', err => {
                             this.log.error('An error occurred while making stream request:', err);
-                            callback(err);
+                            finish(err);
                         });
-    
                         cmd.on('close', code => {
-                            switch (code) {
-                            case null:
-                            case 0:
-                            case 255:
-                                if (this.ss3Camera.debug) this.log('Camera stopped streaming');
-                                break;
-                            default:
-                                if (this.ss3Camera.debug) this.log(`Error: FFmpeg exited with code ${code}`);
-                                if (!started) {
-                                    callback(new Error(`Error: FFmpeg exited with code ${code}`));
-                                } else {
-                                    this.controller.forceStopStreamingSession(sessionId);
-                                }
-                                break;
+                            if (this.ongoingSessions[sessionIdentifier] === cmd) delete this.ongoingSessions[sessionIdentifier];
+                            finish(new Error(`FFmpeg exited before streaming started (code ${code})`));
+                            if (started && !stopping && !this.signal.aborted && ![null, 0, 255].includes(code)) {
+                                try { this.controller.forceStopStreamingSession(sessionId); } catch (err) { /* already gone */ }
                             }
                         });
-    
+
                         this.ongoingSessions[sessionIdentifier] = cmd;
                     } catch (e) {
                         this.log.error(`Unable to spawn ffmpeg process at ${this.ss3Camera.ffmpegPath} with error:`, e);
@@ -536,6 +586,7 @@ class StreamingDelegate {
                 let cmd = this.ongoingSessions[sessionIdentifier];
                 try {
                     if (cmd) {
+                        cmd.stopStream?.();
                         cmd.kill('SIGKILL');
                     }
                 } catch (e) {
@@ -598,12 +649,16 @@ class StreamingDelegate {
                 if (settled) return;
                 settled = true;
                 clearTimeout(timer);
+                this.signal.removeEventListener('abort', cancel);
                 if (err) {
                     cmd.kill('SIGKILL');
                     reject(err);
                 } else resolve(jpeg);
             };
+            const cancel = () => finish(this.signal.reason);
+            this.signal.addEventListener('abort', cancel, { once: true });
             const timer = setTimeout(() => finish(new Error('Snapshot decoder timed out')), snapshotRequestTimeout);
+            if (this.signal.aborted) { cancel(); return; }
             cmd.stdout.on('data', data => {
                 if (settled) return;
                 bytes += data.length;
@@ -624,7 +679,7 @@ class StreamingDelegate {
     async handleLiveKitSnapshotRequest(callback) {
         // Motion is fetching the event's recording snapshot, usually ~2s so worth a short wait
         if (this.eventSnapshot) {
-            let fresh = await waitFor(this.eventSnapshot, eventSnapshotWait, () => null);
+            let fresh = await waitFor(this.eventSnapshot, eventSnapshotWait, () => null, this.signal);
             if (fresh) {
                 callback(undefined, fresh);
                 return;
@@ -650,7 +705,7 @@ class StreamingDelegate {
 
             let snapshot = await waitFor(warming, snapshotRequestTimeout, () => {
                 throw new Error('Camera did not produce a frame in time');
-            });
+            }, this.signal);
             callback(undefined, snapshot);
         } catch (err) {
             this.log.error(`Could not get snapshot for '${this.ss3Camera.name}':`, err.message);
@@ -660,7 +715,7 @@ class StreamingDelegate {
 
     // Camera events link to their recording, its snapshot is fresher and quicker than joining the room
     refreshSnapshotFromEvent(event) {
-        if (this.ss3Camera.getStreamProvider() !== 'livekit' || this.eventSnapshot) return;
+        if (this.signal.aborted || this.ss3Camera.getStreamProvider() !== 'livekit' || this.eventSnapshot) return;
         let url = this.eventSnapshotUrl(event);
         if (!url) return;
 
@@ -686,16 +741,45 @@ class StreamingDelegate {
         let attempts = 0;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(new Error('Event snapshot timed out')), eventSnapshotTimeout);
+        const signal = AbortSignal.any([controller.signal, this.signal]);
         try {
             for (;;) {
                 attempts++;
-                controller.signal.throwIfAborted();
+                signal.throwIfAborted();
                 let res = await fetch(url, {
-                    signal: controller.signal,
+                    signal,
                     headers: { Authorization: `${this.ss3Camera.authManager.tokenType} ${this.ss3Camera.authManager.accessToken}` }
                 });
                 if (res.ok) {
-                    let jpeg = Buffer.from(await res.arrayBuffer());
+                    const limit = 4 * 1024 * 1024;
+                    if (Number(res.headers?.get('content-length')) > limit) {
+                        await res.body?.cancel();
+                        throw new Error('Event snapshot exceeded 4 MiB');
+                    }
+                    let jpeg;
+                    if (res.body?.getReader) {
+                        const reader = res.body.getReader();
+                        const chunks = [];
+                        let bytes = 0;
+                        try {
+                            for (;;) {
+                                const { done, value } = await reader.read();
+                                if (done) break;
+                                bytes += value.byteLength;
+                                if (bytes > limit) throw new Error('Event snapshot exceeded 4 MiB');
+                                chunks.push(Buffer.from(value));
+                            }
+                            jpeg = Buffer.concat(chunks, bytes);
+                        } finally {
+                            await reader.cancel().catch(() => {});
+                            reader.releaseLock();
+                        }
+                    } else {
+                        // Response fixtures/empty bodies still undergo the same size check.
+                        jpeg = Buffer.from(await res.arrayBuffer());
+                        if (jpeg.length > limit) throw new Error('Event snapshot exceeded 4 MiB');
+                    }
+                    signal.throwIfAborted();
                     this.cachedSnapshot = jpeg;
                     this.cachedSnapshotExpires = Date.now() + snapshotCacheTime;
                     if (this.ss3Camera.debug) this.log(`Cached event snapshot for '${this.ss3Camera.name}' (${Math.round(jpeg.length / 1000)}kB) after ${attempts} attempt(s), ${Date.now() - start}ms`);
@@ -705,7 +789,7 @@ class StreamingDelegate {
                 if (res.status != 404 || Date.now() - start + eventSnapshotPollInterval > eventSnapshotTimeout) {
                     throw new Error(`HTTP ${res.status} after ${attempts} attempt(s), ${Date.now() - start}ms`);
                 }
-                await new Promise(resolve => setTimeout(resolve, eventSnapshotPollInterval));
+                await delay(eventSnapshotPollInterval, undefined, { signal });
             }
         } finally {
             clearTimeout(timer);
@@ -714,6 +798,7 @@ class StreamingDelegate {
 
     // Deduped + rate-limited. Returns the in flight warm, or null while backing off
     refreshSnapshot() {
+        if (this.signal.aborted) return null;
         if (this.snapshotWarming) return this.snapshotWarming;
         // A running stream supplies its own keyframes; don't open another room.
         if (Object.keys(this.liveKitSessions).length || Date.now() < this.snapshotRetryAfter) return null;
@@ -727,7 +812,10 @@ class StreamingDelegate {
 
     // Briefly joins the room to grab a keyframe, used when nothing is streaming
     async warmSnapshot() {
+        this.signal.throwIfAborted();
         let source = new LiveKitSource(this.ss3Camera);
+        const cancel = () => source.close();
+        this.signal.addEventListener('abort', cancel, { once: true });
         let keyframe = new KeyframeCollector();
 
         let timeoutID;
@@ -745,6 +833,7 @@ class StreamingDelegate {
             // A stalled connection must not hide the earlier keyframe deadline.
             let [, annexB] = await Promise.all([source.connect(), captured]);
             let jpeg = await this.jpegFromKeyframe(annexB);
+            this.signal.throwIfAborted();
 
             this.cachedSnapshot = jpeg;
             this.cachedSnapshotExpires = Date.now() + snapshotCacheTime;
@@ -752,6 +841,7 @@ class StreamingDelegate {
             return jpeg;
         } finally {
             clearTimeout(timeoutID);
+            this.signal.removeEventListener('abort', cancel);
             source.close();
             this.snapshotWarming = null;
         }
@@ -759,7 +849,7 @@ class StreamingDelegate {
 
     // Caches a snapshot from a stream already in flight, costs one decoded frame
     cacheSnapshotFromStream(keyframe) {
-        if (this.snapshotBusy || Date.now() < this.cachedSnapshotExpires) return;
+        if (this.signal.aborted || this.snapshotBusy || Date.now() < this.cachedSnapshotExpires) return;
 
         this.snapshotBusy = true;
         let annexB = keyframe.annexB();
@@ -767,6 +857,7 @@ class StreamingDelegate {
 
         this.jpegFromKeyframe(annexB)
             .then(jpeg => {
+                if (this.signal.aborted) return;
                 this.cachedSnapshot = jpeg;
                 this.cachedSnapshotExpires = Date.now() + snapshotCacheTime;
             })
@@ -779,7 +870,7 @@ class StreamingDelegate {
     startLiveKitStream(request, sessionIdentifier, sessionInfo, callback) {
         clearTimeout(sessionInfo.prepareTimeoutID);
 
-        if (this.simplisafe.isBlocked && Date.now() < this.simplisafe.nextAttempt) {
+        if (this.signal.aborted || (this.simplisafe.isBlocked && Date.now() < this.simplisafe.nextAttempt)) {
             sessionInfo.liveKitSource.close();
             let err = new Error('Camera stream request blocked (rate limited)');
             this.log.error(err);
@@ -799,14 +890,15 @@ class StreamingDelegate {
 
     setupLiveKitStream(request, sessionIdentifier, sessionInfo, callback) {
         let source = sessionInfo.liveKitSource;
-        let socket = dgram.createSocket('udp4');
         let videoSrtp = this.createSrtpSession(sessionInfo.video_srtp);
+        let socket = dgram.createSocket('udp4');
         let keyframe = new KeyframeCollector();
 
         let session = { source: source, socket: socket, stopped: false };
         this.liveKitSessions[sessionIdentifier] = session;
 
         source.onVideoRtp = rtp => {
+            if (session.stopped || this.signal.aborted) return;
             if (!this.cachedSnapshot || Date.now() >= this.cachedSnapshotExpires) {
                 keyframe.push(rtp.payload, rtp.header);
                 if (keyframe.complete) this.cacheSnapshotFromStream(keyframe);
@@ -846,10 +938,12 @@ class StreamingDelegate {
 
         sessionInfo.liveKitReady
             .then(() => {
+                if (session.stopped || this.signal.aborted) return;
                 if (this.ss3Camera.debug) this.log(`Streaming '${this.ss3Camera.name}' from LiveKit without transcoding`);
                 startAudio();
             })
             .catch(err => {
+                if (session.stopped || this.signal.aborted) return;
                 this.log.error(`LiveKit stream failed for '${this.ss3Camera.name}':`, err.message);
                 this.stopLiveKitStream(sessionIdentifier);
                 try {
@@ -871,6 +965,23 @@ class StreamingDelegate {
         try { session.source.close(); } catch (e) { /* already gone */ }
         try { session.socket.close(); } catch (e) { /* already gone */ }
     }
+    dispose() {
+        if (this.signal.aborted) return;
+        this.lifecycle.abort(new Error('Camera stopped'));
+        for (const session of Object.values(this.pendingSessions)) {
+            clearTimeout(session.prepareTimeoutID);
+            session.liveKitSource?.close();
+        }
+        this.pendingSessions = {};
+        for (const id of Object.keys(this.liveKitSessions)) this.stopLiveKitStream(id);
+        for (const cmd of Object.values(this.ongoingSessions)) {
+            cmd.stopStream?.();
+            cmd.kill('SIGKILL');
+        }
+        this.ongoingSessions = {};
+        this.cachedSnapshot = null;
+    }
+
 }
 
 export default StreamingDelegate;
