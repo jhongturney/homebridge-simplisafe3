@@ -321,12 +321,24 @@ events are excluded from the upstream npm publishing job.
   Lint/type checks pass; production audit is clean. No dependencies change.
 - Field testing pending; checkpoint 10 has no separate all-working confirmation.
 
+## Checkpoint 12 — coordinate background polling
+
+- Sensor polls and alarm status polls share one queue. Each kind can be pending
+  once, and the oldest pending poll runs first. The default sensor interval is
+  15 seconds and the alarm interval is 62 seconds.
+- Pending polls wait for the existing API cooldown to expire. One poll tries
+  first, so a second background poll waits if that request triggers a new
+  cooldown. The 20-second request deadline still applies.
+- Check sensor updates and arm/disarm in HomeKit. If an API failure recurs, note
+  the next failure or the time status updates resume.
+- Field testing pending.
+
 ## Current status
 
 The original eight-stage sequence is complete and field-tested. The requested
 follow-up runtime fixes are included in checkpoint 10. Checkpoint 11 adds the
-requested API diagnostics and includes those runtime changes; field testing is
-pending. Lower-priority build-tool/Docker-detection maintenance and camera
+requested API diagnostics and includes those runtime changes. Checkpoint 12
+coordinates background polling and is ready for field testing. Lower-priority build-tool/Docker-detection maintenance and camera
 CPU profiling remain optional. HKSV is outside this sequence. Upstream submission
 and npm publication remain outside this testing workflow.
 

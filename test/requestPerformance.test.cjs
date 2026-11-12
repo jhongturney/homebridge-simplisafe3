@@ -171,7 +171,7 @@ function pollClock(t) {
 }
 
 for (const kind of ['sensor', 'alarm']) {
-    test(`${kind} polling skips overlapping ticks and recovers after success and failure`, async t => {
+    test(`${kind} polling coalesces overlapping ticks and recovers after failure`, async t => {
         const timers = pollClock(t);
         const { api } = client(t, async () => { throw new Error('Unexpected HTTP request'); });
         const waiting = deferred();
@@ -193,7 +193,7 @@ for (const kind of ['sensor', 'alarm']) {
         waiting.resolve(data);
         await active;
         assert.equal(delivered.length, 1);
-        await timers[0].callback();
+        assert.equal(calls, 2);
         assert.equal(errors.mock.callCount(), 1);
         await timers[0].callback();
         assert.equal(calls, 3);
@@ -228,4 +228,85 @@ test('polling respects the existing lockout and skips empty subscriptions', asyn
     api.alarmSubscriptions = [];
     await Promise.all(timers.map(timer => timer.callback()));
     assert.equal(reads, 0);
+});
+
+test('an alarm poll waits for an active sensor poll and runs before newer sensor ticks', async t => {
+    const timers = pollClock(t);
+    const { api } = client(t, async () => { throw new Error('Unexpected HTTP request'); });
+    const first = deferred();
+    const order = [];
+    api.getSensors = async () => {
+        order.push('sensor');
+        await first.promise;
+        return [];
+    };
+    api.getAlarmSystem = async () => {
+        order.push('alarm');
+        return { serial: 'fixture' };
+    };
+    api.subscribeToSensor('fixture', () => {});
+    api.subscribeToAlarmSystem('fixture', () => {});
+    const running = timers[0].callback();
+    await timers[1].callback();
+    await timers[0].callback();
+    await timers[0].callback();
+    assert.deepEqual(order, ['sensor']);
+    first.resolve();
+    await running;
+    assert.deepEqual(order, ['sensor', 'alarm', 'sensor']);
+});
+
+test('an in-flight poll failure pauses queued work and recovery starts with a single poll', async t => {
+    const timers = pollClock(t);
+    const cooldownTimers = [];
+    t.mock.method(global, 'setTimeout', (callback, delay) => {
+        const timer = { callback, delay };
+        cooldownTimers.push(timer);
+        return timer;
+    });
+    t.mock.method(global, 'clearTimeout', () => {});
+    const { api } = client(t, async () => { throw new Error('Unexpected HTTP request'); });
+    const { RateLimitError } = require(path.join(root, 'simplisafe'));
+    const failedSensor = deferred();
+    const failedAlarm = deferred();
+    const order = [];
+    let now = 1000;
+    t.mock.method(Date, 'now', () => now);
+    api.getSensors = async () => {
+        order.push('sensor');
+        return failedSensor.promise;
+    };
+    api.getAlarmSystem = async () => {
+        order.push('alarm');
+        return failedAlarm.promise;
+    };
+    api.subscribeToSensor('fixture', () => {});
+    api.subscribeToAlarmSystem('fixture', () => {});
+    const running = timers[0].callback();
+    await timers[1].callback();
+
+    api.setRateLimitHandler();
+    failedSensor.reject(new RateLimitError('fixture timeout'));
+    await running;
+    assert.deepEqual(order, ['sensor']);
+    assert.equal(cooldownTimers.at(-1).delay, 60000);
+    now += 15000;
+    await timers[0].callback();
+    assert.deepEqual(order, ['sensor']);
+    assert.equal(cooldownTimers.at(-1).delay, 45000);
+
+    now += 45000;
+    const recovery = cooldownTimers.at(-1).callback();
+    await timers[1].callback();
+    assert.deepEqual(order, ['sensor', 'alarm']);
+    api.setRateLimitHandler();
+    failedAlarm.reject(new RateLimitError('fixture forbidden'));
+    await recovery;
+    assert.deepEqual(order, ['sensor', 'alarm']);
+    assert.equal(cooldownTimers.at(-1).delay, 120000);
+
+    api.dispose();
+    now += 120000;
+    await cooldownTimers.at(-1).callback();
+    assert.deepEqual(order, ['sensor', 'alarm']);
 });

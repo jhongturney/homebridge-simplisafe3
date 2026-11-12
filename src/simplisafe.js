@@ -75,7 +75,7 @@ const rateLimitInitialInterval = 60000; // ms
 const rateLimitMaxInterval = 2 * 60 * 60 * 1000; // ms
 const sensorRefreshLockoutDuration = 20000; // ms
 const errorSuppressionDuration = 5 * 60 * 1000; // ms
-const alarmRefreshInterval = 62000; // ms, avoid overlap with sensor refresh
+const alarmRefreshInterval = 62000; // ms
 
 const wsUrl = 'wss://socketlink.prd.aser.simplisafe.com';
 const socketRetryInterval = 1000; //ms
@@ -108,8 +108,9 @@ class SimpliSafe3 extends EventEmitter {
     accountNumber;
     socket;
     readCache = new RequestCache();
-    sensorPollInFlight = false;
-    alarmPollInFlight = false;
+    pendingPolls = new Set();
+    pollInFlight = false;
+    pollCooldownTimeoutID;
     alarmRefreshIntervalID;
     alarmSubscriptions = [];
     sensorRefreshIntervalID;
@@ -675,102 +676,110 @@ class SimpliSafe3 extends EventEmitter {
         this.isAwaitingSocketReconnect = true;
     }
 
+    queuePoll(kind, subscriptions) {
+        if (this.lifecycle.signal.aborted || !subscriptions.length) return;
+        if (this.refreshLockoutTimeoutID) {
+            if (this.debug) {
+                this.log(kind === 'sensor' ? 'Sensor refresh lockout in effect, refresh blocked.' :
+                    'Refresh lockout in effect, alarm system refresh blocked.');
+            }
+            return;
+        }
+        // A Set keeps the oldest due poll first and coalesces repeated ticks.
+        this.pendingPolls.add(kind);
+        return this.drainPolls();
+    }
+
+    async drainPolls() {
+        if (this.pollInFlight) return;
+        clearTimeout(this.pollCooldownTimeoutID);
+        this.pollCooldownTimeoutID = undefined;
+        this.pollInFlight = true;
+        try {
+            while (this.pendingPolls.size && !this.lifecycle.signal.aborted && !this.refreshLockoutTimeoutID) {
+                const remainingCooldown = this.isBlocked ? this.nextAttempt - Date.now() : 0;
+                if (remainingCooldown > 0) {
+                    this.pollCooldownTimeoutID = setTimeout(() => this.drainPolls(), remainingCooldown);
+                    return;
+                }
+                const [kind] = this.pendingPolls;
+                this.pendingPolls.delete(kind);
+                await this.poll(kind);
+            }
+        } finally {
+            this.pollInFlight = false;
+        }
+    }
+
+    async poll(kind) {
+        const sensorPoll = kind === 'sensor';
+        try {
+            const devices = sensorPoll ? await this.getSensors(true) : [await this.getAlarmSystem(true)];
+            for (const device of devices) {
+                const subscriptions = sensorPoll ? this.sensorSubscriptions : this.alarmSubscriptions;
+                subscriptions.filter(subscription => subscription.id === device.serial)
+                    .forEach(subscription => subscription.callback(device));
+            }
+        } catch (err) {
+            if (this.lifecycle.signal.aborted || err instanceof RateLimitError) return;
+            if (!this.debug) {
+                this.handleErrorSuppression();
+                return;
+            }
+            const label = sensorPoll ? 'Sensor' : 'Alarm system';
+            if (err.statusCode == 409) {
+                const message = `${label} refresh received SettingsInProgress error from the SimpliSafe API.`;
+                if (sensorPoll) {
+                    this.log.debug(`${message} Note this does not necessarily indicate a problem, just that the base station was busy.`);
+                } else {
+                    this.log.warn(message);
+                }
+            } else {
+                this.log.error(`${label} refresh received an error from the SimpliSafe API:`, err);
+            }
+        }
+    }
+
+    clearPendingPoll(kind) {
+        this.pendingPolls.delete(kind);
+        if (!this.pendingPolls.size) {
+            clearTimeout(this.pollCooldownTimeoutID);
+            this.pollCooldownTimeoutID = undefined;
+        }
+    }
+
     subscribeToSensor(id, callback) {
         if (this.lifecycle.signal.aborted) return () => {};
         if (!this.sensorRefreshIntervalID) {
-            this.sensorRefreshIntervalID = setInterval(async () => {
-                if (this.lifecycle.signal.aborted || this.sensorSubscriptions.length == 0 || this.sensorPollInFlight) {
-                    return;
-                }
-        
-                if (this.refreshLockoutTimeoutID) {
-                    if (this.debug) this.log('Sensor refresh lockout in effect, refresh blocked.');
-                    return;
-                }
-        
-                this.sensorPollInFlight = true;
-                try {
-                    let sensors = await this.getSensors(true);
-                    for (let sensor of sensors) {
-                        this.sensorSubscriptions
-                            .filter(sub => sub.id === sensor.serial)
-                            .map(sub => sub.callback(sensor));
-                    }
-                } catch (err) {
-                    if (this.lifecycle.signal.aborted) return;
-                    if (!(err instanceof RateLimitError)) { // never log rate limit errors as they are handled elsewhere
-                        if (this.debug) {
-                            if (err.statusCode == 409) {
-                                this.log.debug('Sensor refresh received SettingsInProgress error from the SimpliSafe API. Note this does not necessarily indicate a problem, just that the base station was busy.');
-                            } else {
-                                this.log.error('Sensor refresh received an error from the SimpliSafe API:', err);
-                            }
-                        } else {
-                            this.handleErrorSuppression();
-                        }
-                    }
-                } finally {
-                    this.sensorPollInFlight = false;
-                }
-        
-            }, this.sensorRefreshTime);
-        
+            this.sensorRefreshIntervalID = setInterval(
+                () => this.queuePoll('sensor', this.sensorSubscriptions), this.sensorRefreshTime);
         }
 
         const subscription = { id, callback };
         this.sensorSubscriptions.push(subscription);
         return () => {
             this.sensorSubscriptions = this.sensorSubscriptions.filter(item => item !== subscription);
-            if (!this.sensorSubscriptions.length) {
-                clearInterval(this.sensorRefreshIntervalID);
-                this.sensorRefreshIntervalID = undefined;
-            }
+            this.stopSensorPollingIfUnused();
         };
     }
 
     unsubscribeFromSensor(id) {
         this.sensorSubscriptions = this.sensorSubscriptions.filter(sub => sub.id !== id);
-        if (this.sensorSubscriptions.length == 0) {
-            clearInterval(this.sensorRefreshIntervalID);
-            this.sensorRefreshIntervalID = undefined;
-        }
+        this.stopSensorPollingIfUnused();
+    }
+
+    stopSensorPollingIfUnused() {
+        if (this.sensorSubscriptions.length) return;
+        clearInterval(this.sensorRefreshIntervalID);
+        this.sensorRefreshIntervalID = undefined;
+        this.clearPendingPoll('sensor');
     }
 
     subscribeToAlarmSystem(id, callback) {
         if (this.lifecycle.signal.aborted) return () => {};
         if (!this.alarmRefreshIntervalID) {
-            this.alarmRefreshIntervalID = setInterval(async () => {
-                if (this.lifecycle.signal.aborted || this.alarmSubscriptions.length == 0 || this.alarmPollInFlight) return;
-                if (this.refreshLockoutTimeoutID) {
-                    if (this.debug) this.log('Refresh lockout in effect, alarm system refresh blocked.');
-                    return;
-                }
-
-                this.alarmPollInFlight = true;
-                try {
-                    let system = await this.getAlarmSystem(true);
-                    this.alarmSubscriptions
-                        .filter(sub => sub.id === system.serial)
-                        .map(sub => sub.callback(system));
-                } catch (err) {
-                    if (this.lifecycle.signal.aborted) return;
-                    if (!(err instanceof RateLimitError)) { // never log rate limit errors as they are handled elsewhere
-                        if (this.debug) {
-                            if (err.statusCode == 409) {
-                                this.log.warn('Alarm system refresh received a SettingsInProgress error from the SimpliSafe API.');
-                            } else {
-                                this.log.error('Alarm system refresh received an error from the SimpliSafe API:', err);
-                            }
-                        } else {
-                            this.handleErrorSuppression();
-                        }
-                    }
-                } finally {
-                    this.alarmPollInFlight = false;
-                }
-
-            }, alarmRefreshInterval);
-
+            this.alarmRefreshIntervalID = setInterval(
+                () => this.queuePoll('alarm', this.alarmSubscriptions), alarmRefreshInterval);
         }
 
         const subscription = { id, callback };
@@ -780,6 +789,7 @@ class SimpliSafe3 extends EventEmitter {
             if (!this.alarmSubscriptions.length) {
                 clearInterval(this.alarmRefreshIntervalID);
                 this.alarmRefreshIntervalID = undefined;
+                this.clearPendingPoll('alarm');
             }
         };
     }
@@ -802,6 +812,8 @@ class SimpliSafe3 extends EventEmitter {
         if (this.lifecycle.signal.aborted) return;
         if (!this.refreshLockoutEnabled) return;
         // avoid "smart lock not responding" error with refresh lockout, see issue #134
+        this.clearPendingPoll('sensor');
+        this.clearPendingPoll('alarm');
         clearTimeout(this.refreshLockoutTimeoutID);
         this.refreshLockoutTimeoutID = setTimeout(() => {
             this.refreshLockoutTimeoutID = undefined;
@@ -812,7 +824,9 @@ class SimpliSafe3 extends EventEmitter {
         if (this.lifecycle.signal.aborted) return;
         this.lifecycle.abort(new Error('SimpliSafe client stopped'));
         for (const timer of [this.sensorRefreshIntervalID, this.alarmRefreshIntervalID, this.socketHeartbeatIntervalID,
-            this.socketReconnectTimeoutID, this.refreshLockoutTimeoutID, this.errorSupperessionTimeoutID]) clearInterval(timer);
+            this.socketReconnectTimeoutID, this.refreshLockoutTimeoutID, this.errorSupperessionTimeoutID,
+            this.pollCooldownTimeoutID]) clearInterval(timer);
+        this.pendingPolls.clear();
         this.authManager.off(AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, this.authFailureListener);
         if (this.socket) {
             this.socket.removeAllListeners();
