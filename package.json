@@ -16,7 +16,7 @@
   "dependencies": {
     "@homebridge/plugin-ui-utils": "2.2.7",
     "@livekit/protocol": "1.53.4",
-    "axios": "1.21.0",
+    "axios": "1.21.1",
     "axios-retry": "4.5.0",
     "ffmpeg-for-homebridge": "2.2.2",
     "is-docker": "2.2.1",
