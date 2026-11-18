@@ -6,7 +6,13 @@ updates:
       interval: weekly
     versioning-strategy: increase
     open-pull-requests-limit: 10
+    # Node typings follow the oldest supported runtime API.
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
     groups:
+      babel:
+        patterns: ['@babel/*']
       development:
         dependency-type: development
         update-types: [minor, patch]

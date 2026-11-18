@@ -2,7 +2,7 @@
   "name": "homebridge-simplisafe3",
   "version": "2.0.0",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
-  "author": "Niccol\u00f2 Zapponi, shamoon",
+  "author": "Niccolò Zapponi, shamoon",
   "funding": {
     "type": "github",
     "url": "https://github.com/sponsors/shamoon"
@@ -14,29 +14,29 @@
     "url": "https://github.com/homebridge-simplisafe3/homebridge-simplisafe3/issues"
   },
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "2.2.7",
-    "@livekit/protocol": "1.53.4",
-    "axios": "1.21.0",
+    "@homebridge/plugin-ui-utils": "2.3.0",
+    "@livekit/protocol": "1.54.1",
+    "axios": "1.21.1",
     "axios-retry": "4.5.0",
     "ffmpeg-for-homebridge": "2.2.2",
     "is-docker": "2.2.1",
     "proper-lockfile": "4.1.2",
-    "werift": "0.26.0",
+    "werift": "0.27.0",
     "ws": "8.22.1"
   },
   "devDependencies": {
-    "@babel/cli": "^7.17.6",
-    "@babel/core": "^7.17.8",
-    "@babel/node": "^7.16.8",
-    "@babel/preset-env": "^7.16.11",
-    "@babel/preset-typescript": "^7.29.7",
+    "@babel/cli": "^8.1.0",
+    "@babel/core": "^8.1.2",
+    "@babel/node": "^8.1.2",
+    "@babel/preset-env": "^8.0.7",
+    "@babel/preset-typescript": "^8.0.7",
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.5",
-    "eslint": "^9.39.5",
-    "globals": "^17.12.0",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
     "homebridge": "^2.5.0",
     "typescript": "~6.0",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "^8.73.0"
   },
   "engines": {
     "homebridge": "^2.5.0",
@@ -79,6 +79,9 @@
     "test:package": "node scripts/verify-package.cjs"
   },
   "overrides": {
-    "json-schema": ">=0.4.0"
+    "json-schema": ">=0.4.0",
+    "cacache": {
+      "glob": "^14.0.6"
+    }
   }
 }

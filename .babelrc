@@ -3,16 +3,17 @@
         [
             "@babel/preset-env",
             {
-                "targets": {
-                    "node": "18"
-                }
+                "modules": "commonjs"
             }
         ],
         [
             "@babel/preset-typescript",
             {
-                "allowDeclareFields": true
+                "onlyRemoveTypeImports": false
             }
         ]
-    ]
+    ],
+    "targets": {
+        "node": "22.12"
+    }
 }

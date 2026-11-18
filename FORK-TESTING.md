@@ -387,7 +387,8 @@ HTTP/polling and settings UI checks against that installed package.
 Dependabot checks npm dependencies and GitHub Actions weekly. Runtime dependency
 updates remain individual pull requests for review and testing.
 
-To build locally, run `npm ci`, `npm test`, `npm run package` and
+Use Node 24.11+ within 24.x or a newer supported LTS version for source builds
+with Babel 8. To build locally, run `npm ci`, `npm test`, `npm run package` and
 `npm run test:package`. The installable package is written to `artifacts/`.
 
 To release a new version, update `package.json` and `package-lock.json` together
@@ -401,3 +402,24 @@ suffix are marked as prereleases.
 The workflow can also be started manually. Its default dry run tests the selected
 branch and uploads a package artifact. To publish manually, specify an existing
 matching version tag and turn off dry run. Use a new version/tag for every release.
+
+
+## Dependency review — 2026-11-18
+
+- Integrate Dependabot PRs 2, 3, 4, 5, 6, 7, 8, 9, 10, 12 and 14 together,
+  resolving shared manifest and lockfile conflicts. Include Axios 1.21.1,
+  UI utils 2.3.0, LiveKit protocol 1.54.1 and Werift 0.27.0.
+- Coordinate the Babel 8 core, CLI, development runner and presets. Remove the
+  obsolete TypeScript preset option and target the supported Node 22.12 runtime.
+  CI builds on Node 24 and runs the compiled tests on Node 22.12.0, 24 and 26.
+- Keep Node typings on the latest 22.x API baseline while Node 22 is supported.
+  Decline PR 11's Node 26 typings upgrade, which fails type checking and widens
+  the available APIs beyond the oldest supported runtime. Dependabot continues
+  to check compatible Node 22 typing updates.
+- Group future Babel updates in Dependabot so peer-dependent packages can move
+  together.
+- Override the development cache's glob dependency to patched 14.0.6 or later.
+  Babel's register package currently uses cacache 20, whose glob 13 dependency
+  has moderate glob/minimatch advisories. Remove the override when its upstream
+  dependency range includes a patched glob. Cache write/verify/read and the
+  Babel TypeScript runner were checked with the override.
