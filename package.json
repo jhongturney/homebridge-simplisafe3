@@ -2,7 +2,7 @@
   "name": "homebridge-simplisafe3",
   "version": "2.0.0",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
-  "author": "Niccol\u00f2 Zapponi, shamoon",
+  "author": "Niccolò Zapponi, shamoon",
   "funding": {
     "type": "github",
     "url": "https://github.com/sponsors/shamoon"
