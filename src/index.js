@@ -1,3 +1,4 @@
+import safeLogger from './lib/safeLogger';
 import SimpliSafe3, { SENSOR_TYPES, RateLimitError } from './simplisafe';
 import SimpliSafe3AuthenticationManager from './lib/authManager';
 import Alarm from './accessories/alarm';
@@ -19,7 +20,7 @@ let UUIDGen;
 class SS3Platform {
 
     constructor(log, config, api) {
-        this.log = log;
+        this.log = safeLogger(log);
         this.name = config.name;
         this.enableCameras = config.cameras || false;
         this.cameraOptions = config.cameraOptions || null;
@@ -41,6 +42,8 @@ class SS3Platform {
         this.authManager = new SimpliSafe3AuthenticationManager(this.api.user.storagePath(), log, this.debug);
         this.simplisafe = new SimpliSafe3(refreshInterval, this.authManager, this.api.user.storagePath(), log, this.debug);
 
+        this.api.on('shutdown', () => this.dispose());
+
         if (config.subscriptionId) {
             if (this.debug) this.log(`Specifying account number: ${config.subscriptionId}`);
             this.simplisafe.setDefaultSubscription(config.subscriptionId);
@@ -54,21 +57,22 @@ class SS3Platform {
 
         this.initialLoad = this.authManager.refreshCredentials()
             .then(() => {
+                if (this.disposed) return;
                 return this.discoverSimpliSafeDevices();
             })
             .catch(err => {
+                if (this.disposed) return;
                 if (err instanceof RateLimitError) {
                     this.log.error('Initial load failed due to rate limiting or connectivity, trying again later');
-                    setTimeout(async () => {
-                        await this.retryBlockedAccessories();
-                    }, this.simplisafe.nextAttempt - Date.now());
+                    this.scheduleRetry();
                 } else {
-                    this.log.error('SimpliSafe login failed with error:', err.toJSON ? err.toJSON() : err);
+                    this.log.error('SimpliSafe login failed with error:', err);
                     this.log.error('See the plugin README for more information on authenticating with SimpliSafe.');
                 }
             });
 
         this.api.on('didFinishLaunching', () => {
+            if (this.disposed) return;
             if (this.debug) this.log(`Found ${this.cachedAccessoryConfig.length} cached accessories to be configured.`);
             if (this.debug) this.log('Attempting intial SimpliSafe credentials refresh.');
             this.initialLoad
@@ -76,6 +80,7 @@ class SS3Platform {
                     return Promise.all(this.cachedAccessoryConfig);
                 })
                 .then(() => {
+                    if (this.disposed) return;
                     if (!this.authManager.isAuthenticated()) throw new Error('Not authenticated with SimpliSafe.');
                     else {
                         this.simplisafe.startListening();
@@ -83,7 +88,7 @@ class SS3Platform {
                     }
                 })
                 .catch(err => {
-                    this.log.error('Initial accessories refresh failed with error:', err.toJSON ? err.toJSON() : err);
+                    this.log.error('Initial accessories refresh failed with error:', err);
                 });
         });
     }
@@ -92,6 +97,7 @@ class SS3Platform {
         let config = new Promise((resolve, reject) => {
             this.initialLoad
                 .then(() => {
+                    if (this.disposed) { resolve(); return; }
                     if (this.simplisafe.isBlocked) {
                         let unreachableAccessory = new UnreachableAccessory(accessory, this.api);
                         this.unreachableAccessories.push(unreachableAccessory);
@@ -138,10 +144,14 @@ class SS3Platform {
     }
 
     removeAccessory(accessory) {
+        if (this.disposed) return;
         if (accessory) {
             if (!this.persistAccessories && !this.simplisafe.isBlocked) {
                 if (this.debug) this.log('Removing accessory', accessory.name ?? accessory.UUID);
                 this.api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
+                const device = this.devices.find(item => item.uuid === accessory.UUID);
+                device?.dispose();
+                this.devices = this.devices.filter(item => item !== device);
             }
             if (this.accessories.indexOf(accessory) > -1) {
                 this.accessories.splice(this.accessories.indexOf(accessory), 1);
@@ -150,6 +160,7 @@ class SS3Platform {
     }
 
     createNewPlatformAccessories() {
+        if (this.disposed) return;
         for (let device of this.devices) {
             let existingAccessory = this.accessories.find(acc => acc.UUID == device.uuid);
             if (!existingAccessory) {
@@ -159,16 +170,18 @@ class SS3Platform {
                     this.api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [accessory]);
                     this.accessories.push(accessory);
                 } catch (err) {
-                    this.log.error('An error occurred while adding accessory:', err.toJSON ? err.toJSON() : err);
+                    this.log.error('An error occurred while adding accessory:', err);
                 }
             }
         }
     }
 
     async discoverSimpliSafeDevices() {
+        if (this.disposed) return;
         if (this.debug) this.log('Discovering devices from SimpliSafe');
         try {
             let subscription = await this.simplisafe.getSubscription();
+            if (this.disposed) return;
             if (subscription.location.system.serial == null) throw new Error('System serial not found.');
             let uuid = UUIDGen.generate(subscription.location.system.serial);
             let alarm = this.accessories.find(acc => acc.UUID === uuid);
@@ -187,6 +200,7 @@ class SS3Platform {
             }
 
             let sensors = await this.simplisafe.getSensors();
+            if (this.disposed) return;
             for (let sensor of sensors) {
                 if (sensor.type == SENSOR_TYPES.KEYPAD ||
                     sensor.type == SENSOR_TYPES.KEYCHAIN ||
@@ -309,6 +323,7 @@ class SS3Platform {
             }
 
             let locks = await this.simplisafe.getLocks();
+            if (this.disposed) return;
             for (let lock of locks) {
                 let lockName = lock.name || `Smart Lock ${lock.serial}`;
                 let uuid = UUIDGen.generate(lock.serial);
@@ -335,6 +350,7 @@ class SS3Platform {
 
             if (this.enableCameras) {
                 let cameras = await this.simplisafe.getCameras();
+                if (this.disposed) return;
 
                 for (let camera of cameras) {
                     let cameraName = camera.cameraSettings.cameraName || `Camera ${camera.uuid}`;
@@ -370,10 +386,10 @@ class SS3Platform {
             }
         } catch (err) {
             if (err instanceof RateLimitError) {
-                this.log.error('Accessory refresh failed due to rate limiting or connectivity:', err.toJSON ? err.toJSON() : err);
+                this.log.error('Accessory refresh failed due to rate limiting or connectivity:', err);
                 this.log.info('Note: this error can also occur if you are not signed up for a SimpliSafe monitoring plan.');
             } else {
-                this.log.error('An error occurred while refreshing accessories:', err.toJSON ? err.toJSON() : err);
+                this.log.error('An error occurred while refreshing accessories:', err);
             }
             throw err;
         }
@@ -388,10 +404,13 @@ class SS3Platform {
     }
 
     async retryBlockedAccessories() {
+        if (this.disposed) return;
         try {
             await this.authManager.refreshCredentials();
+            if (this.disposed) return;
             if (this.debug) this.log('Recovered from 403 rate limit!');
             await this.discoverSimpliSafeDevices();
+            if (this.disposed) return;
             this.cachedAccessoryConfig = [];
             for (let accessory of this.unreachableAccessories) {
                 accessory.clearAccessory();
@@ -402,13 +421,28 @@ class SS3Platform {
         } catch (err) {
             if (err instanceof RateLimitError) {
                 this.log.error('Credentials refresh attempt failed, still rate limited');
-                setTimeout(async () => {
-                    await this.retryBlockedAccessories();
-                }, this.simplisafe.nextAttempt - Date.now());
+                this.scheduleRetry();
             } else {
-                this.log.error('An error occurred while refreshing credentials again:', err.toJSON ? err.toJSON() : err);
+                this.log.error('An error occurred while refreshing credentials again:', err);
             }
         }
+    }
+
+    scheduleRetry() {
+        if (this.disposed) return;
+        clearTimeout(this.retryTimer);
+        this.retryTimer = setTimeout(() => {
+            if (!this.disposed) this.retryBlockedAccessories();
+        }, Math.max(1000, this.simplisafe.nextAttempt - Date.now()));
+    }
+
+    dispose() {
+        if (this.disposed) return;
+        this.disposed = true;
+        clearTimeout(this.retryTimer);
+        for (const device of this.devices) device.dispose?.();
+        this.simplisafe.dispose();
+        this.authManager.dispose();
     }
 
 }

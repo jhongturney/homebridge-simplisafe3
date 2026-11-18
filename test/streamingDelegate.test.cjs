@@ -53,6 +53,44 @@ function createCameraStub(overrides = {}) {
     };
 }
 
+test('legacy snapshot requests use the verified hostname and return the downloaded JPEG', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const jpeg = Buffer.from([0xff, 0xd8, 1, 0xff, 0xd9]);
+    const download = t.mock.method(snapshot, 'default', async (url, options) => {
+        assert.equal(url, 'https://media.simplisafe.com/v1/camera-uuid/mjpg?x=640&fr=1');
+        assert.equal(options.headers.Authorization, 'Bearer token-123');
+        return jpeg;
+    });
+    const delegate = new StreamingDelegate(createCameraStub());
+    const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+    assert.deepEqual(result, [undefined, jpeg]);
+    assert.equal(download.mock.callCount(), 1);
+});
+
+test('legacy snapshots preserve shutter privacy in every alarm mode', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const download = t.mock.method(snapshot, 'default', async () => { throw new Error('must not contact the camera'); });
+    for (const alarmState of ['OFF', 'HOME', 'AWAY']) {
+        const delegate = new StreamingDelegate(createCameraStub({
+            supportsPrivacyShutter: () => true,
+            simplisafe: { isBlocked: false, getAlarmSystem: async () => ({ alarmState }) },
+        }));
+        const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+        assert.equal(result[0], undefined);
+        assert.ok(Buffer.isBuffer(result[1]));
+    }
+    assert.equal(download.mock.callCount(), 0);
+});
+
+test('legacy snapshot download failures reach the HomeKit callback', async t => {
+    const snapshot = require('../dist/lib/jpegSnapshot');
+    const error = new Error('Camera snapshot timed out');
+    t.mock.method(snapshot, 'default', async () => { throw error; });
+    const delegate = new StreamingDelegate(createCameraStub());
+    const result = await new Promise(resolve => delegate.handleSnapshotRequest({ width: 640, height: 480 }, (...args) => resolve(args)));
+    assert.deepEqual(result, [error]);
+});
+
 test('constructor limits advertised resolutions to the configured picture quality', () => {
     const delegate = new StreamingDelegate(createCameraStub());
     const heights = delegate.controller.streamingOptions.video.resolutions.map((resolution) => resolution[1]);
@@ -94,6 +132,22 @@ test('livekit snapshot request serves a cached frame while it is fresh', async (
 test('stopLiveKitStream is a no-op for an unknown session', () => {
     const delegate = new StreamingDelegate(createCameraStub({ getStreamProvider: () => 'livekit' }));
     assert.doesNotThrow(() => delegate.stopLiveKitStream('uuid:missing'));
+});
+
+test('stop before stream start releases the prepared room immediately', async t => {
+    const delegate = new StreamingDelegate(createCameraStub({ getStreamProvider: () => 'livekit' }));
+    let closed = 0;
+    const timer = setTimeout(() => assert.fail('abandoned prepare timer fired'), 20000);
+    t.after(() => clearTimeout(timer));
+    delegate.pendingSessions['uuid:fixture'] = {
+        prepareTimeoutID: timer, liveKitSource: { close: () => { closed++; } },
+    };
+    let callbacks = 0;
+    await delegate.handleStreamRequest({ sessionID: 'fixture', type: 'stop' }, () => { callbacks++; });
+    assert.equal(closed, 1);
+    assert.equal(callbacks, 1);
+    assert.equal(delegate.pendingSessions['uuid:fixture'], undefined);
+    assert.equal(timer._destroyed, true);
 });
 
 test('prepareStream records pending session details for audio and video', () => {
@@ -257,7 +311,8 @@ test('fetchEventSnapshot polls past 404s until the recording has the frame', asy
         authHeader = options.headers.Authorization;
         return responses.shift();
     });
-    t.mock.method(global, 'setTimeout', (fn) => { fn(); return 0; });
+    const schedule = global.setTimeout;
+    t.mock.method(global, 'setTimeout', (fn, delay) => delay === 1000 ? (fn(), 0) : schedule(fn, delay));
 
     const result = await delegate.fetchEventSnapshot('https://remix.example/snap');
 

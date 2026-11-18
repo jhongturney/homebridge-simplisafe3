@@ -57,16 +57,19 @@ class SS3Alarm extends SimpliSafe3Accessory {
         // SimpliSafe events
         this.startListening();
 
-        this.simplisafe.subscribeToAlarmSystem(this.id, (system) => {
+        const unsubscribe = this.simplisafe.subscribeToAlarmSystem(this.id, (system) => {
+            if (this.disposed) return;
             // update power outage status in case event was never received i.e. wifi out
             if (this.service) this.service.updateCharacteristic(this.api.hap.Characteristic.StatusTampered, system.powerOutage ? this.api.hap.Characteristic.StatusTampered.TAMPERED : this.api.hap.Characteristic.StatusTampered.NOT_TAMPERED);
         });
 
+        if (unsubscribe) (this.cleanup ||= []).push(unsubscribe);
+
         // handle authentication failures
-        this.simplisafe.authManager.on(AUTH_EVENTS.REFRESH_CREDENTIALS_SUCCESS, () => {
+        this.listen(this.simplisafe.authManager, AUTH_EVENTS.REFRESH_CREDENTIALS_SUCCESS, () => {
             if (this.service) this.setFault(false);
         });
-        this.simplisafe.authManager.on(AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, () => {
+        this.listen(this.simplisafe.authManager, AUTH_EVENTS.REFRESH_CREDENTIALS_FAILURE, () => {
             if (this.service) this.setFault();
         });
     }
@@ -160,11 +163,11 @@ class SS3Alarm extends SimpliSafe3Accessory {
             if (data.state == 'OFF') {
                 this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.DISARMED);
             } else if (data.exitDelay && data.exitDelay > 0) {
-                setTimeout(async () => {
+                this.defer(async () => {
                     await this.refreshState();
                 }, data.exitDelay * 1000);
             } else {
-                setTimeout(async () => {
+                this.defer(async () => {
                     await this.refreshState();
                 }, 1000);
             }
@@ -176,7 +179,7 @@ class SS3Alarm extends SimpliSafe3Accessory {
             if ([409, 504].includes(parseInt(err.statusCode)) && this.nRetries < targetStateMaxRetries) {
                 if (this.debug) this.log(`${err.type} error while setting alarm state. nRetries: ${this.nRetries}`);
                 this.nRetries++;
-                setTimeout(async () => {
+                this.defer(async () => {
                     if (this.debug) this.log('Retrying setTargetState.');
                     await this.setTargetState(homekitState, callback);
                 }, 1000 + 500 * Math.random()); // wait 1.5-ish seconds and try again
@@ -190,64 +193,64 @@ class SS3Alarm extends SimpliSafe3Accessory {
     }
 
     startListening() {
-        this.simplisafe.on(EVENT_TYPES.ALARM_TRIGGER, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.ALARM_TRIGGER, (data) => {
             if (!this._validateEvent(EVENT_TYPES.ALARM_TRIGGER, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.ALARM_DISARM, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.ALARM_DISARM, (data) => {
             if (!this._validateEvent(EVENT_TYPES.ALARM_DISARM, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.DISARM);
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.DISARMED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.ALARM_CANCEL, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.ALARM_CANCEL, (data) => {
             if (!this._validateEvent(EVENT_TYPES.ALARM_CANCEL, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.DISARM);
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.DISARMED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.HOME_ARM, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.HOME_ARM, (data) => {
             if (!this._validateEvent(EVENT_TYPES.HOME_ARM, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.STAY_ARM);
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.STAY_ARM);
         });
 
-        this.simplisafe.on(EVENT_TYPES.ALARM_OFF, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.ALARM_OFF, (data) => {
             if (!this._validateEvent(EVENT_TYPES.ALARM_OFF, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.DISARM);
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.DISARMED);
         });
 
-        this.simplisafe.on(EVENT_TYPES.AWAY_ARM, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.AWAY_ARM, (data) => {
             if (!this._validateEvent(EVENT_TYPES.AWAY_ARM, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.AWAY_ARM);
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemCurrentState, this.api.hap.Characteristic.SecuritySystemCurrentState.AWAY_ARM);
         });
 
-        this.simplisafe.on(EVENT_TYPES.HOME_EXIT_DELAY, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.HOME_EXIT_DELAY, (data) => {
             if (!this._validateEvent(EVENT_TYPES.HOME_EXIT_DELAY, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.STAY_ARM);
         });
 
-        this.simplisafe.on(EVENT_TYPES.AWAY_EXIT_DELAY, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.AWAY_EXIT_DELAY, (data) => {
             if (!this._validateEvent(EVENT_TYPES.AWAY_EXIT_DELAY, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.SecuritySystemTargetState, this.api.hap.Characteristic.SecuritySystemTargetState.AWAY_ARM);
         });
 
-        this.simplisafe.on(EVENT_TYPES.POWER_OUTAGE, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.POWER_OUTAGE, (data) => {
             if (!this._validateEvent(EVENT_TYPES.POWER_OUTAGE, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.StatusTampered, this.api.hap.Characteristic.StatusTampered.TAMPERED);
             if (data.messageBody) this.log.warn(data.messageBody);
         });
 
-        this.simplisafe.on(EVENT_TYPES.POWER_RESTORED, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.POWER_RESTORED, (data) => {
             if (!this._validateEvent(EVENT_TYPES.POWER_RESTORED, data)) return;
             this.service.updateCharacteristic(this.api.hap.Characteristic.StatusTampered, this.api.hap.Characteristic.StatusTampered.NOT_TAMPERED);
             if (data.messageBody) this.log.warn(data.messageBody);
         });
 
-        this.simplisafe.on(EVENT_TYPES.USER_INITIATED_TEST, (data) => {
+        this.listen(this.simplisafe, EVENT_TYPES.USER_INITIATED_TEST, (data) => {
             if (!this._validateEvent(EVENT_TYPES.USER_INITIATED_TEST, data)) return;
             this.log.warn('Detected user-initiated test, not a true alarm.');
         });
