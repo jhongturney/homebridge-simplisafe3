@@ -441,3 +441,13 @@ ordering cannot select the legacy compiler.
 
 The runtime test matrix still runs unit, HTTP and WebRTC tests on Node 22.12.0,
 24 and 26 with Homebridge 2.5.0. Builds, lint and compiler checks run on Node 24.
+
+## Version 2.0.1
+
+Patch release of the reviewed dependency, security and toolchain maintenance
+since version 2.0.0. Includes the 14 merged Dependabot updates and the
+TypeScript 7 compiler with the supported TypeScript 6 lint API.
+
+Requires Homebridge 2.5+ within 2.x and supports Node 22.12+ within 22.x,
+24.x and 26.x. The release workflow verifies the tag, runs required checks
+and attaches the tested production package to the GitHub release.
