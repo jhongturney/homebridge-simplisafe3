@@ -429,3 +429,15 @@ matching version tag and turn off dry run. Use a new version/tag for every relea
   Resolve new lint findings by removing unused initial assignments and
   preserving wrapped error causes. Credential-file parser causes remain
   excluded because they can include file contents.
+
+## TypeScript 7 compiler — 2026-11-18
+
+Use TypeScript 7.0.2 for the no-emit compiler check through the
+`typescript-compiler` npm alias. Keep Microsoft's `@typescript/typescript6`
+compatibility package aliased as `typescript` for the compiler API required by
+typescript-eslint. This follows Microsoft's documented side-by-side migration.
+Invoke the compiler through its explicit package path so npm executable-link
+ordering cannot select the legacy compiler.
+
+The runtime test matrix still runs unit, HTTP and WebRTC tests on Node 22.12.0,
+24 and 26 with Homebridge 2.5.0. Builds, lint and compiler checks run on Node 24.
