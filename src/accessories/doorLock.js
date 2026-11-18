@@ -86,7 +86,7 @@ class SS3DoorLock extends SimpliSafe3Accessory {
 
             return lock;
         } catch (err) {
-            throw new Error(`An error occurred while getting '${this.name}' lock information from SS: ${err}`);
+            throw new Error(`An error occurred while getting '${this.name}' lock information from SS: ${err}`, { cause: err });
         }
     }
 

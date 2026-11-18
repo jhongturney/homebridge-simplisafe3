@@ -9,6 +9,8 @@ export function readAccount(filename) {
     try { account = JSON.parse(fs.readFileSync(filename, 'utf8')); }
     catch (err) {
         if (err.code === 'ENOENT') return null;
+        // JSON parser errors can contain credential file contents.
+        // eslint-disable-next-line preserve-caught-error
         throw new Error(`Cannot read credentials in ${filename}; restore a valid file or sign in again. The file was preserved.`);
     }
     if (!account || typeof account !== 'object' || Array.isArray(account) ||

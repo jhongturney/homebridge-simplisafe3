@@ -139,7 +139,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
                 throw new Error();
             }
             code = maybeCode;
-        } catch (error) {
+        } catch {
             throw new Error('Invalid redirect URL');
         }
 
@@ -174,7 +174,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
             return this.accessToken;
         } catch (err) {
             const error = err as Error;
-            throw new Error(`Error getting token: ${error.message || error.toString()}`);
+            throw new Error(`Error getting token: ${error.message || error.toString()}`, { cause: err });
         }
     }
 
@@ -255,7 +255,7 @@ class SimpliSafe3AuthenticationManager extends EventEmitter {
             writeAccount(path.join(this.storagePath, accountsFilename), account);
         } catch (err) {
             this.log.error?.('Unable to write accounts file.', err);
-            throw new Error(`Failed storing token with error message "${(err as Error).message}"`);
+            throw new Error(`Failed storing token with error message "${(err as Error).message}"`, { cause: err });
         }
         this.accessToken = token.access_token;
         this.refreshToken = refreshToken;

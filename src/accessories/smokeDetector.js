@@ -76,7 +76,7 @@ class SS3SmokeDetector extends SimpliSafe3Accessory {
         }
 
         if (!forceRefresh) {
-            let characteristic = null;
+            let characteristic;
 
             if (parameter == 'triggered') {
                 characteristic = this.service.getCharacteristic(this.api.hap.Characteristic.SmokeDetected);
