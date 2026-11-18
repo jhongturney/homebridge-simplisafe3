@@ -331,14 +331,21 @@ events are excluded from the upstream npm publishing job.
   cooldown. The 20-second request deadline still applies.
 - Check sensor updates and arm/disarm in HomeKit. If an API failure recurs, note
   the next failure or the time status updates resume.
-- Field testing pending.
+- User confirmed successful field testing on 2026-11-18. This includes the
+  runtime improvements inherited from checkpoints 9 through 11.
+
+## Version 2.0.0
+
+- Require Homebridge 2.5+ within the 2.x series.
+- Test Homebridge 2.5.0 with Node 22.12.0, 24 and 26 in CI.
+- Use the field-tested checkpoint 12 runtime as the basis for the major release.
 
 ## Current status
 
 The original eight-stage sequence is complete and field-tested. The requested
 follow-up runtime fixes are included in checkpoint 10. Checkpoint 11 adds the
 requested API diagnostics and includes those runtime changes. Checkpoint 12
-coordinates background polling and is ready for field testing. Lower-priority build-tool/Docker-detection maintenance and camera
+coordinates background polling and passed user field testing on 2026-11-18. Lower-priority build-tool/Docker-detection maintenance and camera
 CPU profiling remain optional. HKSV is outside this sequence. Upstream submission
 and npm publication remain outside this testing workflow.
 
@@ -373,8 +380,7 @@ configuration and accessory pairing.
 
 The fork default branch is `master`. CI runs lint, TypeScript checks, all unit
 tests, local HTTP deadline tests and WebRTC integration tests. The compatibility
-matrix covers Node 22.12.0 and 24 with Homebridge 1.11.4 and 2.5.0, plus Node 26
-with Homebridge 2.5.0. A separate job builds the installable tarball, installs it
+matrix covers Node 22.12.0, 24 and 26 with Homebridge 2.5.0. A separate job builds the installable tarball, installs it
 with production dependencies, checks plugin registration and the CLI, and runs
 HTTP/polling and settings UI checks against that installed package.
 

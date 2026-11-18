@@ -1,6 +1,6 @@
 {
   "name": "homebridge-simplisafe3",
-  "version": "1.11.5-jhongturney.12",
+  "version": "2.0.0",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
   "author": "Niccol\u00f2 Zapponi, shamoon",
   "funding": {
@@ -39,7 +39,7 @@
     "typescript-eslint": "^8.70.1"
   },
   "engines": {
-    "homebridge": "^1.11.4 || ^2.5.0",
+    "homebridge": "^2.5.0",
     "node": "^22.12.0 || ^24.0.0 || ^26.0.0"
   },
   "files": [

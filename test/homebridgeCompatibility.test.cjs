@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 
 // Instantiate the host's API in the test harness without starting a bridge.
-// The matrix installs Homebridge 1 and 2, so these checks use each host's real HAP.
+// These checks use the supported Homebridge 2 host's real HAP.
 const { HomebridgeAPI } = require(path.join(path.dirname(require.resolve('homebridge')), 'api.js'));
 const initialize = require('../dist').default;
 const StreamingDelegate = require('../dist/lib/streamingDelegate').default;
