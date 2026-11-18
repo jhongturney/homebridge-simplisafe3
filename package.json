@@ -33,10 +33,10 @@
     "@eslint/js": "^9.39.5",
     "@types/node": "^22.20.5",
     "eslint": "^9.39.5",
-    "globals": "^17.12.0",
+    "globals": "^17.14.0",
     "homebridge": "^2.5.0",
     "typescript": "~6.0",
-    "typescript-eslint": "^8.70.1"
+    "typescript-eslint": "^8.72.2"
   },
   "engines": {
     "homebridge": "^2.5.0",
