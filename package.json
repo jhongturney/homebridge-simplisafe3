@@ -21,7 +21,7 @@
     "ffmpeg-for-homebridge": "2.2.2",
     "is-docker": "2.2.1",
     "proper-lockfile": "4.1.2",
-    "werift": "0.26.0",
+    "werift": "0.27.0",
     "ws": "8.22.1"
   },
   "devDependencies": {
