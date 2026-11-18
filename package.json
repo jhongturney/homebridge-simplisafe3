@@ -14,7 +14,7 @@
     "url": "https://github.com/homebridge-simplisafe3/homebridge-simplisafe3/issues"
   },
   "dependencies": {
-    "@homebridge/plugin-ui-utils": "2.2.7",
+    "@homebridge/plugin-ui-utils": "2.3.0",
     "@livekit/protocol": "1.53.4",
     "axios": "1.21.0",
     "axios-retry": "4.5.0",
