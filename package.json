@@ -25,9 +25,9 @@
     "ws": "8.22.1"
   },
   "devDependencies": {
-    "@babel/cli": "^7.17.6",
+    "@babel/cli": "^8.1.0",
     "@babel/core": "^8.1.2",
-    "@babel/node": "^7.16.8",
+    "@babel/node": "^8.1.2",
     "@babel/preset-env": "^8.0.7",
     "@babel/preset-typescript": "^8.0.7",
     "@eslint/js": "^9.39.5",
@@ -79,6 +79,9 @@
     "test:package": "node scripts/verify-package.cjs"
   },
   "overrides": {
-    "json-schema": ">=0.4.0"
+    "json-schema": ">=0.4.0",
+    "cacache": {
+      "glob": "^14.0.6"
+    }
   }
 }
