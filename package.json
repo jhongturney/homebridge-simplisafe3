@@ -36,7 +36,7 @@
     "globals": "^17.14.0",
     "homebridge": "^2.5.0",
     "typescript": "~6.0",
-    "typescript-eslint": "^8.72.2"
+    "typescript-eslint": "^8.73.0"
   },
   "engines": {
     "homebridge": "^2.5.0",
