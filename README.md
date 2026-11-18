@@ -33,10 +33,12 @@ Here are some example screenshots:
 
 ## Usage
 
-This testing fork supports Node 22.12+ within the 22.x series, Node 24.x and
-Node 26.x. Use Homebridge 1.11.4+ within the 1.x series or Homebridge 2.5+ within
-the 2.x series. Homebridge 1 is tested on Node 22 and 24; Homebridge 2 is tested
-on Node 22, 24 and 26. Install the fork's compiled GitHub release package.
+Version 2 requires Homebridge 2.5+ within the 2.x series. This fork supports
+Node 22.12+ within the 22.x series, Node 24.x and Node 26.x. CI tests Homebridge 2
+on all three Node versions. Install the fork's compiled GitHub release package.
+
+Upgrade Homebridge to 2.5 or later before installing plugin version 2. Homebridge 1
+users can continue using the checkpoint 12 release, `1.11.5-jhongturney.12`.
 
 This plugin supports installation and changing settings (for `config.js`) via the popular [Config UI X plugin](https://github.com/oznu/homebridge-config-ui-x) which is recommended for easiest usage.
 
