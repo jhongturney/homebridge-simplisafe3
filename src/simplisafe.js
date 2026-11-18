@@ -172,7 +172,7 @@ class SimpliSafe3 extends EventEmitter {
             } catch (credentialsErr) {
                 if (this.debug) this.log.error('Recovery credentials refresh failed with error:', credentialsErr);
                 if (credentialsErr.isAxiosError && credentialsErr.response) {
-                    throw new Error(`${credentialsErr.response.status}: ${credentialsErr.response.statusText}`);
+                    throw new Error(`${credentialsErr.response.status}: ${credentialsErr.response.statusText}`, { cause: credentialsErr });
                 } else {
                     throw credentialsErr;
                 }

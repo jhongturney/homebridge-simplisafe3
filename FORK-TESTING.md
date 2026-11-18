@@ -423,3 +423,9 @@ matching version tag and turn off dry run. Use a new version/tag for every relea
   has moderate glob/minimatch advisories. Remove the override when its upstream
   dependency range includes a patched glob. Cache write/verify/read and the
   Babel TypeScript runner were checked with the override.
+
+- Follow-up Dependabot PRs 16, 17 and 18 update Docker detection to 4.0.0,
+  ESLint recommended rules to 10.0.1 and WebSocket transport to 8.23.0.
+  Resolve new lint findings by removing unused initial assignments and
+  preserving wrapped error causes. Credential-file parser causes remain
+  excluded because they can include file contents.

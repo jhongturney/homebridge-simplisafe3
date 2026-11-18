@@ -38,7 +38,7 @@ class Login {
             console.log('\nCredentials retrieved successfully.');
             console.log('Please restart Homebridge for changes to take effect.');
         } catch (e) {
-            throw new Error(`An error occurred retrieving credentials: ${(e as Error).message}`);
+            throw new Error(`An error occurred retrieving credentials: ${(e as Error).message}`, { cause: e });
         } finally {
             // A one-off login must not keep running the background token refresh.
             clearInterval(this.authManager.refreshInterval);
