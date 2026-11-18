@@ -2,7 +2,7 @@
   "name": "homebridge-simplisafe3",
   "version": "1.11.5-jhongturney.12",
   "description": "A complete Homebridge plugin for the SimpliSafe 3 security system",
-  "author": "Niccolò Zapponi, shamoon",
+  "author": "Niccol\u00f2 Zapponi, shamoon",
   "funding": {
     "type": "github",
     "url": "https://github.com/sponsors/shamoon"
@@ -69,12 +69,14 @@
     "build": "rm -rf dist && babel src -d dist --extensions .js,.ts && cp -r package.json config.schema.json homebridge-ui bin images README.md dist/",
     "deploy": "npm publish dist/",
     "start": "nodemon --exec babel-node src/index.js",
-    "test": "npm run build && npm run test:unit",
+    "test": "npm run build && npm run test:unit && npm run test:webrtc && npm run test:http",
     "test:unit": "node --test test/*.test.cjs",
     "test:webrtc": "node --test test/webrtc.integration.cjs",
     "test:http": "node --test test/httpDeadline.integration.cjs",
     "lint": "eslint src",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "package": "npm run build && node scripts/package.cjs",
+    "test:package": "node scripts/verify-package.cjs"
   },
   "overrides": {
     "json-schema": ">=0.4.0"

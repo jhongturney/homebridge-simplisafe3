@@ -367,3 +367,31 @@ npm install --save-exact homebridge-simplisafe3@1.11.4
 
 Then leave the shell and restart Homebridge. Keep the existing plugin
 configuration and accessory pairing.
+
+
+## Fork maintenance
+
+The fork default branch is `master`. CI runs lint, TypeScript checks, all unit
+tests, local HTTP deadline tests and WebRTC integration tests. The compatibility
+matrix covers Node 22.12.0 and 24 with Homebridge 1.11.4 and 2.5.0, plus Node 26
+with Homebridge 2.5.0. A separate job builds the installable tarball, installs it
+with production dependencies, checks plugin registration and the CLI, and runs
+HTTP/polling and settings UI checks against that installed package.
+
+Dependabot checks npm dependencies and GitHub Actions weekly. Runtime dependency
+updates remain individual pull requests for review and testing.
+
+To build locally, run `npm ci`, `npm test`, `npm run package` and
+`npm run test:package`. The installable package is written to `artifacts/`.
+
+To release a new version, update `package.json` and `package-lock.json` together
+and merge the change into `master`. Tag that commit with `v` followed by the
+package version, then push the tag. The Release plugin package workflow checks
+that the tag matches the version and points to a commit merged into the default
+branch, runs the complete CI suite, builds and tests the tarball, and creates a
+GitHub release with that package attached. Versions containing a prerelease
+suffix are marked as prereleases.
+
+The workflow can also be started manually. Its default dry run tests the selected
+branch and uploads a package artifact. To publish manually, specify an existing
+matching version tag and turn off dry run. Use a new version/tag for every release.

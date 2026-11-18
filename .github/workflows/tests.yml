@@ -3,14 +3,25 @@ name: Node Tests
 on:
   push:
   pull_request:
-    branches: [ master ]
+    branches: [master, main]
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: ""
+
+permissions:
+  contents: read
 
 jobs:
   lint:
     name: Lint and Typecheck
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v6
         with:
           node-version: 22
@@ -22,6 +33,7 @@ jobs:
   test:
     name: Test (Node ${{ matrix.node-version }}, Homebridge ${{ matrix.homebridge-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +45,8 @@ jobs:
             homebridge-version: '1.11.4'
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
@@ -44,3 +58,20 @@ jobs:
       - run: npm run test:unit
       - run: npm run test:webrtc
       - run: npm run test:http
+
+
+  package:
+    name: Package installation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run package
+      - run: npm run test:package
